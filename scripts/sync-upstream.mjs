@@ -120,7 +120,16 @@ const status = git(['status', '--porcelain'])
 if (status !== '') fail('the worktree is dirty, commit or stash first')
 
 ensureUpstream()
+git(['fetch', '-q', 'origin', 'main'])
 git(['fetch', '-q', 'upstream', 'main'])
+
+const beforeOrigin = git(['rev-parse', 'HEAD'])
+try {
+  git(['merge', '--ff-only', 'origin/main'])
+} catch {
+  console.log('sync-upstream: local main has unpublished commits, not fast-forwarding from origin/main')
+}
+if (git(['rev-parse', 'HEAD']) !== beforeOrigin) console.log('sync-upstream: fast-forwarded to origin/main')
 
 const ancestor = (() => {
   try {

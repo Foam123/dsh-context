@@ -44,6 +44,7 @@
     "lint:fix": "oxlint --fix",
     "check": "node scripts/run-bash.mjs scripts/check.sh",
     "sync": "node scripts/sync-upstream.mjs && node scripts/sync-local.mjs --build",
+    "sync:push": "node scripts/sync-upstream.mjs --push",
     "sync:upstream": "node scripts/sync-upstream.mjs",
     "sync:local": "node scripts/sync-local.mjs --build",
     "watch": "node scripts/watch.mjs",
