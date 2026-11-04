@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, readFileSync, readdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -38,9 +38,20 @@ function installedCandidates() {
 
 function runBuild() {
   const execPath = process.env.npm_execpath
-  const result = execPath === undefined
-    ? spawnSync('pnpm', ['run', 'build'], { cwd: ROOT, stdio: 'inherit', shell: true })
-    : spawnSync(process.execPath, [execPath, 'run', 'build'], { cwd: ROOT, stdio: 'inherit' })
+  const command = execPath === undefined || /\.(?:cmd|bat)$/i.test(execPath)
+    ? execPath ?? 'pnpm'
+    : /\.(?:c|m)?js$/i.test(execPath) ? process.execPath : execPath
+  const args = execPath !== undefined && /\.(?:c|m)?js$/i.test(execPath)
+    ? [execPath, 'run', 'build']
+    : ['run', 'build']
+  mkdirSync(join(ROOT, '.tmp', 'build'), { recursive: true })
+  const buildTmp = join(ROOT, '.tmp', 'build')
+  const result = spawnSync(command, args, {
+    cwd: ROOT,
+    stdio: 'inherit',
+    shell: execPath === undefined || /\.(?:cmd|bat)$/i.test(execPath),
+    env: { ...process.env, TMP: buildTmp, TEMP: buildTmp, TMPDIR: buildTmp },
+  })
   if (result.status !== 0) fail('the build failed')
 }
 
