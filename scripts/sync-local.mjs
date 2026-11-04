@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -34,6 +35,16 @@ function installedCandidates() {
     .map(profile => join(profiles, profile, 'node_modules', 'dsh-context'))
     .filter(dir => existsSync(dir) && packageName(dir) === 'dsh-context')
 }
+
+function runBuild() {
+  const execPath = process.env.npm_execpath
+  const result = execPath === undefined
+    ? spawnSync('pnpm', ['run', 'build'], { cwd: ROOT, stdio: 'inherit', shell: true })
+    : spawnSync(process.execPath, [execPath, 'run', 'build'], { cwd: ROOT, stdio: 'inherit' })
+  if (result.status !== 0) fail('the build failed')
+}
+
+if (process.argv.includes('--build')) runBuild()
 
 for (const artifact of ARTIFACTS) {
   if (!existsSync(join(ROOT, artifact))) fail('missing ' + artifact + ', run the build first')
