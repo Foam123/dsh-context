@@ -38,14 +38,6 @@
 .lc-sl-label { flex: 1 1 auto; min-width: 0; line-height: 1.25; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lc-sl-pct { flex: none; min-width: 30px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
 .lc-sl-sub { margin-left: 14px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1.3; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lc-pi-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
-.lc-pi-row-btn { appearance: none; border: 0; background: none; font: inherit; color: inherit; text-align: left; padding: 0; cursor: pointer; width: 100%; }
-.lc-pi-row { display: flex; flex-direction: row; justify-content: space-between; align-items: baseline; gap: 12px; min-width: 0; text-decoration: none; color: inherit; }
-.lc-pi-hint { text-decoration: none; }
-.lc-pi-update { display: block; color: var(--dsw-alias-state-warn-primary); font-size: 11px; margin-top: 1px; white-space: nowrap; }
-.lc-pi-label { flex: none; color: var(--dsw-alias-label-secondary); font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lc-pi-labelicon { display: inline-block; vertical-align: -2px; margin-right: 4px; }
-.lc-pi-value { min-width: 0; color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
 .lc-stats { display: flex; flex-direction: column; justify-content: center; gap: 10px; min-width: 0; }
 .lc-ledger { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 28px; align-items: start; min-width: 0; }
 .lc-core { grid-area: 1 / 1 / 2 / 3; }

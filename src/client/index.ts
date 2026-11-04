@@ -39,7 +39,6 @@ import './styles/fleet.css'
 import './styles/pulse.css'
 import './styles/overview.css'
 import './styles/dateRange.css'
-import './styles/recom.css'
 
 const NS = 'dsh-context'
 
