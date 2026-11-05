@@ -14,6 +14,7 @@ import { createContextHeadersDefinition } from './headers'
 import { watchPromptInjection } from './promptInjection'
 import { watchStepIdentity } from './stepIdentity'
 import { watchSkillCatalog } from './skills'
+import { watchSnapshotRoute } from './snapshotRoute'
 import { watchTimelineRowSweep } from './sweep'
 import { createContextTimelineDefinition } from './timeline'
 import { detectHarnessVersion } from './version'
@@ -47,6 +48,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.sessionProjections.register(createContextActivityDefinition())
   watchTimelineRowSweep(ctx)
   watchActivityBackfill(ctx, coldReads)
+  watchSnapshotRoute(ctx)
   watchPromptInjection(ctx, config)
 }
 
