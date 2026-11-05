@@ -2,6 +2,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { runPm } from './pm.mjs'
 
 const ROOT = resolve(import.meta.dirname, '..')
 const UPSTREAM_URL = 'https://github.com/bowenliang123/dsh-context'
@@ -175,6 +176,15 @@ if (!merged) {
 
 stripWorktree()
 verify()
+git(['add', '-A'])
+
+const staged = git(['diff', '--cached', '--name-only'])
+if (/^(package\.json|pnpm-lock\.yaml)$/m.test(staged)) {
+  console.log('sync-upstream: dependencies changed upstream, installing them')
+  const status = runPm(['install', '--frozen-lockfile', '--ignore-scripts'])
+  if (status !== 0) fail('the dependency install failed, the merge is left staged for inspection')
+}
+
 git(['add', '-A'])
 git(['commit', '-q', '--no-edit'])
 
