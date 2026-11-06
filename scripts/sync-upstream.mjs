@@ -21,19 +21,9 @@ const REMOVED_FILES = [
   'tests/shared/recoms.spec.ts',
 ]
 
-const CONTEXT_VIEW_REMOVALS = new Set([
-  "import { makeRecomCard } from './recomCard'",
-  "import { makePluginInfo } from './pluginInfo'",
-  'const RecomCard = makeRecomCard(kit, ctx)',
-  'const PluginInfo = makePluginInfo(kit, ctx)',
-  '<RecomCard />',
-  '<PluginInfo />',
-])
-
 const I18N_REMOVAL = /^\s*'(recom\.title|plugin\.(title|hint|name|github))':/
 
 const LINE_RULES = new Map([
-  ['src/client/components/contextView.tsx', line => CONTEXT_VIEW_REMOVALS.has(line.trim())],
   ['src/client/i18nEn.ts', line => I18N_REMOVAL.test(line)],
   ['src/client/i18nZh.ts', line => I18N_REMOVAL.test(line)],
   ['src/host/index.ts', line => /^\s*import \{ watchRecomChannel \} from '\.\/recoms'\s*$/.test(line) || /^\s*watchRecomChannel\(ctx\)\s*$/.test(line)],
@@ -45,7 +35,7 @@ const LINE_RULES = new Map([
 
 const BASE_HEAD_BLOCK = /\.lc-head \{ container: lc-head \/ inline-size; \}\r?\n\.lc-head > \.lc-col \{[^\n]*\}\r?\n@container lc-head \(min-width: 640px\) \{\r?\n[^\n]*\r?\n\}\r?\n/
 
-const FORBIDDEN = /lc-recom|lc-pi-|makeRecomCard|makePluginInfo|watchRecomChannel|RECOM_ROUTE|recom\.title|plugin\.(title|hint|name|github)'/
+const FORBIDDEN = /lc-recom|lc-pi-|makeRecomCard|makePluginInfo|\bRecomCard\b|\bPluginInfo\b|watchRecomChannel|RECOM_ROUTE|recom\.title|plugin\.(title|hint|name|github)'/
 
 function git(args, options = {}) {
   return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options }).trim()
@@ -72,7 +62,14 @@ function stripText(file, text) {
     next = next.split(/\r?\n/).filter(line => !rule(line)).join(eol)
   }
   if (file.endsWith('contextView.tsx')) {
-    next = next.replace(/\r?\n[ \t]*<div className="lc-col">\r?\n[ \t]*<\/div>/, '')
+    next = next
+      .replace(/^import \{ makeRecomCard \} from '\.\/recomCard'\r?\n/m, '')
+      .replace(/^import \{ makePluginInfo \} from '\.\/pluginInfo'\r?\n/m, '')
+      .replace(/^[ \t]*const RecomCard = makeRecomCard\([^\n]*\)\r?\n/m, '')
+      .replace(/^[ \t]*const PluginInfo = makePluginInfo\([^\n]*\)\r?\n/m, '')
+      .replace(/\r?\n[ \t]*<RecomCard\b[\s\S]*?\/>/, '')
+      .replace(/\r?\n[ \t]*<PluginInfo\b[\s\S]*?\/>/, '')
+      .replace(/\r?\n[ \t]*<div className="lc-col">\r?\n[ \t]*<\/div>/, '')
   }
   if (file.endsWith('base.css')) {
     next = next.replace(BASE_HEAD_BLOCK, '')
