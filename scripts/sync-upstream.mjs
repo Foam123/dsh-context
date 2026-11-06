@@ -116,9 +116,79 @@ function verify() {
   }
 }
 
+function inMerge() {
+  try {
+    git(['rev-parse', '--verify', 'MERGE_HEAD'])
+    return true
+  } catch {
+    return false
+  }
+}
+
+function unmergedFiles() {
+  return git(['diff', '--name-only', '--diff-filter=U']).split(/\r?\n/).filter(Boolean)
+}
+
+function abortMerge(reason) {
+  try {
+    git(['merge', '--abort'])
+  } catch {
+  }
+  fail(reason + ', the merge was aborted')
+}
+
+function resolveConflicts() {
+  const unmerged = unmergedFiles()
+  if (unmerged.length === 0) return
+  const known = unmerged.filter(file => REMOVED_FILES.includes(file) || LINE_RULES.has(file) || file.endsWith('base.css') || file.endsWith('tsdown.config.ts'))
+  const unknown = unmerged.filter(file => !known.includes(file))
+  if (unknown.length > 0) abortMerge('conflicts outside the known removed cards, resolve them by hand:\n  ' + unknown.join('\n  '))
+  for (const file of known) {
+    if (REMOVED_FILES.includes(file)) {
+      git(['rm', '-q', '-f', '--', file])
+      continue
+    }
+    git(['checkout', '--theirs', '--', file])
+    const path = resolve(ROOT, file)
+    writeFileSync(path, stripText(file, readFileSync(path, 'utf8')))
+    git(['add', '--', file])
+  }
+  console.log('sync-upstream: resolved ' + known.length + ' conflict(s) by keeping the removal')
+}
+
+function installIfNeeded() {
+  const staged = git(['diff', '--cached', '--name-only'])
+  if (!/^(package\.json|pnpm-lock\.yaml)$/m.test(staged)) return
+  console.log('sync-upstream: dependencies changed upstream, installing them')
+  if (runPm(['install', '--frozen-lockfile', '--ignore-scripts']) !== 0) abortMerge('the dependency install failed')
+}
+
+function runGate() {
+  for (const script of ['lint', 'typecheck', 'coverage']) {
+    if (runPm(['run', script]) !== 0) abortMerge('the ' + script + ' gate failed')
+  }
+}
+
+function finishMerge() {
+  resolveConflicts()
+  stripWorktree()
+  verify()
+  git(['add', '-A'])
+  installIfNeeded()
+  git(['add', '-A'])
+  runGate()
+  git(['commit', '-q', '--no-edit', '--no-verify'])
+  console.log('sync-upstream: merged ' + UPSTREAM_REF + ' into ' + git(['log', '--oneline', '-1']))
+}
+
 const args = new Set(process.argv.slice(2))
 const status = git(['status', '--porcelain'])
-if (status !== '') fail('the worktree is dirty, commit or stash first')
+if (inMerge()) {
+  console.log('sync-upstream: finishing a pending merge from an earlier run')
+  finishMerge()
+} else if (status !== '') {
+  fail('the worktree is dirty, commit or stash first')
+}
 
 ensureUpstream()
 git(['fetch', '-q', 'origin', 'main'])
@@ -152,44 +222,8 @@ try {
 } catch {
   merged = false
 }
-
-if (!merged) {
-  const unmerged = git(['diff', '--name-only', '--diff-filter=U']).split(/\r?\n/).filter(Boolean)
-  const known = unmerged.filter(file => REMOVED_FILES.includes(file) || LINE_RULES.has(file) || file.endsWith('base.css') || file.endsWith('tsdown.config.ts'))
-  const unknown = unmerged.filter(file => !known.includes(file))
-  if (unknown.length > 0) {
-    git(['merge', '--abort'])
-    fail('conflicts outside the known removed cards, resolve them by hand:\n  ' + unknown.join('\n  '))
-  }
-  for (const file of known) {
-    if (REMOVED_FILES.includes(file)) {
-      git(['rm', '-q', '-f', '--', file])
-      continue
-    }
-    git(['checkout', '--theirs', '--', file])
-    const path = resolve(ROOT, file)
-    writeFileSync(path, stripText(file, readFileSync(path, 'utf8')))
-    git(['add', '--', file])
-  }
-  console.log('sync-upstream: resolved ' + known.length + ' conflict(s) by keeping the removal')
-}
-
-stripWorktree()
-verify()
-git(['add', '-A'])
-
-const staged = git(['diff', '--cached', '--name-only'])
-if (/^(package\.json|pnpm-lock\.yaml)$/m.test(staged)) {
-  console.log('sync-upstream: dependencies changed upstream, installing them')
-  const status = runPm(['install', '--frozen-lockfile', '--ignore-scripts'])
-  if (status !== 0) fail('the dependency install failed, the merge is left staged for inspection')
-}
-
-git(['add', '-A'])
-git(['commit', '-q', '--no-edit'])
-
-const head = git(['log', '--oneline', '-1'])
-console.log('sync-upstream: merged ' + UPSTREAM_REF + ' into ' + head)
+if (!merged && unmergedFiles().length === 0) abortMerge('the merge failed without conflicts')
+finishMerge()
 
 if (args.has('--push')) {
   git(['push', 'origin', 'main'])
