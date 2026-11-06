@@ -3,6 +3,10 @@ import { resolve } from 'node:path'
 
 export const ROOT = resolve(import.meta.dirname, '..')
 
+if (process.env.HOME === undefined && process.env.USERPROFILE !== undefined) {
+  process.env.HOME = process.env.USERPROFILE
+}
+
 function invocation() {
   const execPath = process.env.npm_execpath
   if (execPath === undefined) return { command: 'corepack', prefix: ['pnpm'], shell: true }
