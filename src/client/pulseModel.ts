@@ -1,6 +1,6 @@
 import type { AgentForest, AgentNode } from './agentTree'
 import { modelLabelOf } from './agentTree'
-import { fromPartyOf, type CommsAgent } from './commsModel'
+import { fromPartyOf, kindGroupOf, type CommsAgent, type CommsKindFilter } from './commsModel'
 import type { CommsRow, FleetDelegationRow } from './fleetDetail'
 import { familyOthersOf, taskOwnerIdOf, type FleetTeam, type FleetTeamTask } from './fleetTeam'
 
@@ -23,11 +23,11 @@ export interface PulseDelegationItem extends PulseTimelineBase {
 
 export type PulseTimelineItem = PulseMessageItem | PulseDelegationItem
 
-export function pulseTimelineItemsOf(
+function pulseItemsOf(
   rows: readonly CommsRow[],
   delegations: readonly FleetDelegationRow[],
 ): PulseTimelineItem[] {
-  const items: PulseTimelineItem[] = [
+  return [
     ...rows.map(row => ({
       kind: 'message' as const,
       key: row.key,
@@ -45,9 +45,36 @@ export function pulseTimelineItemsOf(
       delegation,
     })),
   ]
-  return items.sort((a, b) => (a.time - b.time)
+}
+
+export function pulseTimelineItemsOf(
+  rows: readonly CommsRow[],
+  delegations: readonly FleetDelegationRow[],
+): PulseTimelineItem[] {
+  return pulseItemsOf(rows, delegations).sort((a, b) => (a.time - b.time)
     || ((a.kind === 'delegation' ? 0 : 1) - (b.kind === 'delegation' ? 0 : 1))
     || a.key.localeCompare(b.key))
+}
+
+export function pulseEventItemsOf(
+  rows: readonly CommsRow[],
+  delegations: readonly FleetDelegationRow[],
+): PulseTimelineItem[] {
+  return pulseItemsOf(rows, delegations).sort((a, b) => (b.time - a.time) || (a.key < b.key ? -1 : 1))
+}
+
+export function pulseEventRowsOf(items: readonly PulseTimelineItem[]): CommsRow[] {
+  return items.filter(item => item.kind === 'message').map(item => item.row)
+}
+
+export function pulseEventGroupOf(item: PulseTimelineItem): Exclude<CommsKindFilter, 'all'> {
+  return item.kind === 'delegation' ? 'delegation' : kindGroupOf(item.row)
+}
+
+export function pulseEventMatchesOf(item: PulseTimelineItem): readonly (string | undefined)[] {
+  return item.kind === 'delegation'
+    ? [item.delegation.label]
+    : [item.row.text, item.row.summary, item.row.report]
 }
 
 export const PULSE_LANE_HEIGHT = 68
@@ -213,6 +240,21 @@ export function pulseTaskOf(
 ): FleetTeamTask | null {
   const tasks = tasksByAgent.get(item.to) ?? tasksByAgent.get(item.from) ?? []
   return tasks.length === 0 ? null : tasks[0]
+}
+
+export function pulseTaskLaneIdsOf(
+  items: readonly PulseTimelineItem[],
+  tasksByAgent: ReadonlyMap<string, readonly FleetTeamTask[]>,
+  taskFilterId: string | null,
+): ReadonlySet<string> | null {
+  if (taskFilterId === null) return null
+  const ids = new Set<string>()
+  for (const item of items) {
+    if (pulseTaskOf(item, tasksByAgent)?.id !== taskFilterId) continue
+    ids.add(item.from)
+    ids.add(item.to)
+  }
+  return ids
 }
 
 export type PulseWorkAgentState = 'running' | 'latest_complete' | 'idle'

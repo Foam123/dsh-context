@@ -1,12 +1,12 @@
 import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { describe, test, vi } from 'vitest'
-import { CommsEvent, CommsEventDetail } from '../../../src/client/components/commsEvent'
+import { CommsEvent, CommsEventDetail, DelegationEvent } from '../../../src/client/components/commsEvent'
 import { makeRichText } from '../../../src/client/components/richText'
 import type { CommsAgent } from '../../../src/client/commsModel'
 import type { CommsRow } from '../../../src/client/fleetDetail'
 import type { FleetMessage } from '../../../src/shared/types'
-import { makeKit, mount, query, queryAll, text } from '../helpers/kit'
+import { click, makeKit, mount, query, queryAll, text } from '../helpers/kit'
 
 const kit = makeKit()
 const rich = makeRichText(kit)
@@ -155,5 +155,85 @@ describe('CommsEvent and detail', () => {
     const pending = await mountEvent(row, { fullPending: true })
     assert.ok(text(query(pending.container, '.lc-comms-detail')).includes(kit.t('fleet.comms.detail.loading')))
     await pending.unmount()
+  })
+
+  test('the body offers raw, markdown, copy and find controls', async () => {
+    const row: CommsRow = {
+      key: 'root:40:11000:relay', to: 'root', seq: 40, time: 11000, kind: 'relay', from: 'w1',
+      text: '# Report\n\nsome **bold** body',
+    }
+    const mounted = await mountEvent(row)
+    const detail = query(mounted.container, '.lc-comms-detail')
+    const tools = query(detail, '.lc-comms-detail-tools')
+    assert.deepEqual(
+      queryAll<HTMLElement>(tools, '.lc-gran-btn').map(button => text(button)),
+      [kit.t('rich.raw'), kit.t('rich.md')],
+    )
+    assert.ok(query(tools, '.lc-rich-copy'))
+    assert.ok(query(detail, '.lc-comms-detail-body .lc-ts-desc-md'))
+    await click(queryAll<HTMLElement>(tools, '.lc-gran-btn')[0])
+    assert.deepEqual(
+      queryAll(detail, '.lc-comms-detail-body .lc-ts-line').map(line => text(line)),
+      ['# Report', '', 'some **bold** body'],
+    )
+    assert.equal(queryAll(detail, '.lc-comms-detail-body .lc-ts-desc-md').length, 0)
+    await click(queryAll<HTMLElement>(tools, '.lc-gran-btn')[1])
+    assert.ok(query(detail, '.lc-comms-detail-body .lc-ts-desc-md'))
+    await click(query(tools, '.lc-find-btn'))
+    assert.ok(query(detail, '.lc-comms-detail-body .lc-find'))
+    await click(queryAll(query(detail, '.lc-find'), '.lc-find-btn')[2])
+    assert.equal(queryAll(detail, '.lc-find').length, 0)
+    await mounted.unmount()
+  })
+
+  test('json-shaped message text still opens as markdown', async () => {
+    const row: CommsRow = {
+      key: 'root:41:11100:relay', to: 'root', seq: 41, time: 11100, kind: 'relay', from: 'w1', text: '{"ok":true}',
+    }
+    const mounted = await mountEvent(row)
+    const body = query(mounted.container, '.lc-comms-detail-body')
+    assert.ok(query(body, '.lc-ts-desc-md'))
+    assert.equal(queryAll(body, '.lc-ts-desc-json').length, 0)
+    assert.deepEqual(
+      queryAll<HTMLElement>(body, '.lc-gran-btn').map(button => text(button)),
+      [kit.t('rich.raw'), kit.t('rich.md')],
+    )
+    await mounted.unmount()
+  })
+
+  test('a delegation row keeps the task preview and folds its route and duty into the head', async () => {
+    const delegation = {
+      key: 'root:9:w2', seq: 9, time: 9000, from: 'root', to: 'w2', mode: 'continuable' as const, label: 'Map host boundaries',
+    }
+    const mounted = await mount(h(DelegationEvent, {
+      delegation,
+      agentOf,
+      preview: 'Scan the host package tree.',
+      open: false,
+      onToggle: vi.fn(),
+      t: kit.t,
+    }))
+    assert.equal(query(mounted.container, '.lc-comms-event').dataset.commsKey, 'root:9:w2')
+    assert.ok(query(mounted.container, '.lc-comms-kind-delegation'))
+    assert.ok(text(query(mounted.container, '.lc-comms-kind')).includes(kit.t('fleet.pulse.delegation')))
+    assert.ok(text(query(mounted.container, '.lc-comms-flow')).includes('Lead'))
+    assert.ok(text(query(mounted.container, '.lc-comms-flow')).includes('dsh-source-map child 45'))
+    assert.ok(text(query(mounted.container, '.lc-comms-preview')).includes('Scan the host package tree.'))
+    assert.equal(query(mounted.container, '.lc-comms-event').children.length, 1)
+    await mounted.unmount()
+    const namedMounted = await mount(h(DelegationEvent, {
+      delegation: { ...delegation, from: 'w1', to: 'root' },
+      agentOf,
+      preview: '',
+      open: true,
+      onToggle: vi.fn(),
+      children: h('div', { className: 'lc-comms-detail' }, 'detail body'),
+      t: kit.t,
+    }))
+    const roles = queryAll<HTMLElement>(namedMounted.container, '.lc-comms-role').map(role => text(role))
+    assert.deepEqual(roles, [kit.t('fleet.role.teammate')])
+    assert.ok(text(query(namedMounted.container, '.lc-comms-event')).includes('detail body'))
+    assert.equal(text(query(namedMounted.container, '.lc-comms-preview')).trim(), '')
+    await namedMounted.unmount()
   })
 })

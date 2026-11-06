@@ -116,7 +116,7 @@ describe('Multi-Agent Fleet', () => {
           delegations: [{ seq: 9, time: 500, to: 'catalog-child', mode: 'continuable', label: 'Explore the host' }],
           truncated: false,
         }
-        : { messages: [], truncated: false }
+        : { messages: [], truncated: false, initialPrompt: 'Walk the host package tree and report its boundaries.' }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, value }) } as Response)
     })
     const snapshot = {
@@ -134,8 +134,14 @@ describe('Multi-Agent Fleet', () => {
     await until(() => queryAll(m.container, '.lc-pulse-event').length === 1, 'delegation never landed')
     assert.equal(query(m.container, '[data-pulse-stat="messages"]').textContent, '0')
     assert.ok(text(query(m.container, '.lc-pulse-timeline .lc-card-sub')).includes('1/1'))
-    await click(query(m.container, '[data-event-key="catalog-root:9:catalog-child"]'))
+    await until(
+      () => text(query(m.container, '.lc-comms-event[data-kind="delegation"]')).includes('Walk the host package tree'),
+      'delegation prompt preview never landed',
+    )
+    await click(query(m.container, '.lc-comms-event[data-kind="delegation"] .lc-comms-hit'))
     assert.ok(text(query(m.container, '.lc-pulse-delegation-detail')).includes('Explore the host'))
+    assert.ok(text(query(m.container, '.lc-pulse-delegation-detail')).includes('Walk the host package tree and report its boundaries.'))
+    assert.ok(text(query(m.container, '.lc-pulse-delegation-detail')).includes(DICT_EN['fleet.tasks.brief']))
     await m.unmount()
     ctx.dispose()
   })
@@ -216,7 +222,7 @@ describe('Multi-Agent Fleet', () => {
     ctx.dispose()
   })
 
-  test('filters the collaboration records by task and keeps task reveal and clear actions', async () => {
+  test('filters the collaboration records and lanes by task and keeps task reveal and clear actions', async () => {
     vi.stubGlobal('fetch', (_url: unknown, init: { body: string }) => {
       const { sessionId } = JSON.parse(init.body) as { sessionId: string }
       const messages = sessionId === 'root'
@@ -240,12 +246,21 @@ describe('Multi-Agent Fleet', () => {
     assert.equal(queryAll(m.container, '[data-task-chip]').length, 1)
     assert.equal(query(m.container, '[data-task-chip="task-1"]').getAttribute('aria-pressed'), 'true')
     assert.equal(query(m.container, '[data-task="task-1"] .lc-pulse-work-focus').getAttribute('aria-expanded'), 'true')
-    assert.ok(text(query(m.container, '.lc-pulse-timeline .lc-card-sub')).includes('1/2'))
+    assert.deepEqual(
+      queryAll<HTMLElement>(m.container, '.lc-pulse-lane-label[data-lane-label]').map(el => el.dataset.laneLabel),
+      ['root', 'w1'],
+    )
+    assert.equal(queryAll(m.container, '[data-quiet-lane]').length, 0)
+    assert.ok(text(query(m.container, '.lc-pulse-timeline .lc-card-sub')).includes('1/2 records · 2 lanes'))
     assert.equal(text(query(m.container, '.lc-pulse-task-filter')), 'Task 1 ×')
     await click(query(m.container, '.lc-pulse-task-filter'))
     assert.equal(queryAll(m.container, '.lc-pulse-event').length, 2)
     assert.equal(queryAll(m.container, '.lc-pulse-task-filter').length, 0)
     assert.equal(m.container.ownerDocument.activeElement, query(m.container, '[data-sequence-scroller]'))
+    assert.deepEqual(
+      queryAll<HTMLElement>(m.container, '.lc-pulse-lane-label[data-lane-label]').map(el => el.dataset.laneLabel),
+      ['root', 'w1', 'w2', 'w9'],
+    )
     await click(query(m.container, '[data-task-chip="task-0"]'))
     assert.equal(queryAll(m.container, '.lc-pulse-event').length, 1)
     assert.equal(query(m.container, '.lc-pulse-event').getAttribute('data-to'), 'root')
@@ -429,13 +444,17 @@ describe('Multi-Agent Fleet', () => {
     ctx.dispose()
   })
 
-  test('folds quiet lanes without changing fleet totals and reveals search matches explicitly', async () => {
+  test('folds quiet lanes without changing fleet totals, reveals search matches, and scopes lanes to the filtered task', async () => {
+    const quietTeam = {
+      enabled: true,
+      tasks: [{ id: 'task-2', subject: 'burst task', description: '', status: 'in_progress', ownerId: 'q2', blockedBy: [], writeScopes: [], ready: true, writeScopeWarnings: [] }],
+    }
     const byId = Object.fromEntries(Array.from({ length: 10 }, (_, index) => [`q${index}`, {
       ...(index > 0 ? { parentId: 'q0', origin: 'subagent' } : {}),
       displayTitle: `Agent ${index}`,
       running: index === 1,
       updatedAt: 10 - index,
-      projectionValues: index > 0 ? { subagent: { mode: 'one-shot', label: `Agent ${index}` } } : {},
+      projectionValues: index > 0 ? { subagent: { mode: 'one-shot', label: `Agent ${index}` } } : { agentTeam: quietTeam },
     }]))
     vi.stubGlobal('fetch', (_url: unknown, init: { body: string }) => {
       const { sessionId } = JSON.parse(init.body) as { sessionId: string }
@@ -466,6 +485,21 @@ describe('Multi-Agent Fleet', () => {
     await typeText(query<HTMLInputElement>(m.container, '.lc-pulse-timeline .lc-pulse-search'), 'Agent 8')
     assert.ok(query(m.container, '[data-lane-label="q8"]') !== null)
     assert.equal(query(m.container, '[data-pulse-stat="agents"]').textContent, '10')
+    await typeText(query<HTMLInputElement>(m.container, '.lc-pulse-timeline .lc-pulse-search'), '')
+    await click(query(m.container, '[data-task-chip="task-2"]'))
+    assert.deepEqual(
+      queryAll<HTMLElement>(m.container, '.lc-pulse-lane-label[data-lane-label]').map(el => el.dataset.laneLabel),
+      ['q2', 'q3'],
+    )
+    assert.ok(text(query(m.container, '.lc-pulse-timeline .lc-card-sub')).includes('1/1 records · 2 lanes'))
+    assert.equal(queryAll(m.container, '[data-quiet-lane]').length, 0)
+    await click(query(m.container, '.lc-pulse-task-filter'))
+    await click(query(m.container, '[data-quiet-lane] button'))
+    assert.ok(text(query(m.container, '.lc-pulse-quiet')).includes(DICT_EN['fleet.pulse.hideQuiet']))
+    await click(query(m.container, '[data-task-chip="task-2"]'))
+    assert.equal(queryAll(m.container, '.lc-pulse-quiet').length, 0)
+    await click(query(m.container, '.lc-pulse-task-filter'))
+    assert.equal(queryAll(m.container, '.lc-pulse-quiet').length, 1)
     await m.unmount()
     ctx.dispose()
   })
@@ -545,6 +579,13 @@ describe('Multi-Agent Fleet', () => {
     })
     await until(() => text(query(m.container, '[data-task="task-w1"]')).includes('Three of three checks passed.'), 'full delegation reply never landed')
     assert.ok(text(query(m.container, '[data-task="task-w1"]')).includes('Inspect the complete schema.'))
+    const detail = query(m.container, '[data-task="task-w1"] .lc-pulse-work-detail')
+    assert.deepEqual(
+      queryAll<HTMLElement>(detail, '.lc-ts-card .lc-gran-btn').map(button => text(button)),
+      [DICT_EN['rich.raw'], DICT_EN['rich.md'], DICT_EN['rich.raw'], DICT_EN['rich.md']],
+    )
+    assert.equal(queryAll(detail, '.lc-rich-copy').length, 2)
+    assert.equal(queryAll(detail, '.lc-find-btn').length, 2)
     const actions = queryAll(m.container, '[data-task="task-w1"] .lc-pulse-work-actions button')
     await click(actions[0])
     await click(actions[1])
@@ -850,5 +891,28 @@ describe('Multi-Agent Fleet', () => {
     }])
     await sidebarMount.unmount()
     sidebarCtx.dispose()
+  })
+
+  test('opens each event message as markdown and resets the rich tools when the event changes', async () => {
+    stubFleetRoute()
+    const ctx = new TestClientCtx({ services: { sessions: familySessions() } })
+    const View = makeView(ctx)
+    const m = await mount(h(View, { sessionId: 'root', useProjection: projectionsFor(richTimeline()) }))
+    await settleEvents(m)
+    const modes = (): Array<[string, boolean]> => queryAll<HTMLElement>(m.container, '.lc-pulse-inspector .lc-comms-detail-tools .lc-gran-btn')
+      .map(button => [text(button), button.classList.contains('lc-gran-on')])
+    assert.deepEqual(modes(), [[DICT_EN['rich.raw'], false], [DICT_EN['rich.md'], true]])
+    await click(query(m.container, '.lc-pulse-inspector .lc-comms-detail-tools .lc-gran-btn'))
+    assert.ok(query(m.container, '.lc-pulse-inspector .lc-ts-line'))
+    await click(query(m.container, '.lc-pulse-inspector .lc-comms-detail-tools .lc-find-btn'))
+    assert.equal(queryAll(m.container, '.lc-pulse-inspector .lc-find').length, 1)
+    const events = queryAll<HTMLElement>(m.container, '.lc-pulse-event-list .lc-comms-hit')
+    assert.ok(events.length >= 2)
+    await click(events[1]!)
+    assert.deepEqual(modes(), [[DICT_EN['rich.raw'], false], [DICT_EN['rich.md'], true]])
+    assert.equal(queryAll(m.container, '.lc-pulse-inspector .lc-ts-line').length, 0)
+    assert.equal(queryAll(m.container, '.lc-pulse-inspector .lc-find').length, 0)
+    await m.unmount()
+    ctx.dispose()
   })
 })

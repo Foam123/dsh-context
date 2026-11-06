@@ -2,7 +2,7 @@ import { type ReactElement, type ReactNode } from 'react'
 import { StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { IconPanelLeftOutlineRegular, IconRightUpOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { fromPartyOf, previewOf, settledToneOf, type CommsAgent } from '../commsModel'
-import { settledVariantOf, type CommsRow } from '../fleetDetail'
+import { settledVariantOf, type CommsRow, type FleetDelegationRow } from '../fleetDetail'
 import { fmtDateTime, fmtTime } from '../format'
 import { IconChevronDown, IconChevronUp, IconClose } from '../primitives'
 import type { ViewKit } from '../viewkit'
@@ -88,6 +88,65 @@ export function CommsEvent(props: CommsEventProps): ReactElement {
   )
 }
 
+export interface DelegationEventProps {
+  delegation: FleetDelegationRow
+  agentOf: (party: string) => CommsAgent
+  preview: string
+  open: boolean
+  onToggle: () => void
+  children?: ReactNode
+  t: ViewKit['t']
+}
+
+export function DelegationEvent(props: DelegationEventProps): ReactElement {
+  const { delegation, t } = props
+  const from = props.agentOf(delegation.from)
+  const to = props.agentOf(delegation.to)
+  const fromRole = roleTextOf(from, t)
+  const toRole = roleTextOf(to, t)
+  return (
+    <li
+      className={'lc-comms-event lc-comms-kind-delegation' + (props.open ? ' lc-comms-event-open' : '')}
+      style={channelStyle(from.hue, to.hue)}
+      data-comms-key={delegation.key}
+      data-kind="delegation"
+    >
+      <button
+        type="button"
+        className="lc-comms-hit"
+        aria-expanded={props.open}
+        aria-controls={detailIdOf(delegation.key)}
+        onClick={props.onToggle}
+      >
+        <span className="lc-comms-event-head">
+          <time className="lc-comms-time">{fmtTime(delegation.time)}</time>
+          <span className="lc-comms-flow">
+            <span className="lc-comms-party">
+              <AgentAvatar agent={from} t={t} />
+              <span className="lc-comms-party-name" title={from.name}>{from.name}</span>
+              {fromRole !== '' ? <span className="lc-comms-role">{fromRole}</span> : null}
+            </span>
+            <span className="lc-comms-arrow" aria-hidden="true">→</span>
+            <span className="lc-comms-party">
+              <AgentAvatar agent={to} t={t} />
+              <span className="lc-comms-party-name" title={to.name}>{to.name}</span>
+              {toRole !== '' ? <span className="lc-comms-role">{toRole}</span> : null}
+            </span>
+          </span>
+          <span className="lc-comms-kind">{t('fleet.pulse.delegation')}</span>
+          <span className="lc-comms-chev" aria-hidden="true">
+            {props.open ? <IconChevronUp size={12} /> : <IconChevronDown size={12} />}
+          </span>
+        </span>
+        <span className="lc-comms-preview">
+          {props.preview !== '' ? <span className="lc-comms-preview-text">{props.preview}</span> : null}
+        </span>
+      </button>
+      {props.open ? props.children : null}
+    </li>
+  )
+}
+
 export interface CommsEventDetailProps {
   row: CommsRow
   agentOf: (party: string) => CommsAgent
@@ -116,6 +175,7 @@ export function CommsEventDetail(props: CommsEventDetailProps): ReactElement {
   const structured = props.full?.structured ?? row.structured
   const diagnostic = props.full?.diagnostic ?? row.diagnostic
   const copyText = body !== '' ? body : (resolvedSummary ?? row.text)
+  const view = props.rich.useRichView(body, false)
   const stillClipped = props.full !== null && props.full.clipped === true
   const excerptOnly = row.clipped === true && !props.fullPending && (props.full === null || stillClipped)
   const loadingNote = props.fullPending
@@ -138,7 +198,7 @@ export function CommsEventDetail(props: CommsEventDetailProps): ReactElement {
         </span>
         <span className="lc-comms-detail-seq">{t('fleet.comms.detail.seq', { n: row.seq })}</span>
         <span className="lc-comms-detail-actions">
-          <props.rich.RichCopy text={copyText} />
+          {body === '' ? <props.rich.RichCopy text={copyText} /> : null}
           <button
             type="button"
             className="lc-inspector-btn lc-comms-detail-close"
@@ -227,11 +287,14 @@ export function CommsEventDetail(props: CommsEventDetailProps): ReactElement {
       {loadingNote !== null ? <div className="lc-comms-detail-loading">{loadingNote}</div> : null}
 
       <div className="lc-comms-detail-body">
-        {body !== ''
-          ? <props.rich.RichText text={body} mode="md" />
-          : <div className="lc-comms-detail-empty">
-            {t(row.kind === 'settled' ? 'fleet.comms.detail.noReport' : 'fleet.comms.detail.noBody')}
-          </div>}
+        {body !== '' ? (
+          <>
+            <div className="lc-comms-detail-tools">{view.tools}</div>
+            {view.body}
+          </>
+        ) : <div className="lc-comms-detail-empty">
+          {t(row.kind === 'settled' ? 'fleet.comms.detail.noReport' : 'fleet.comms.detail.noBody')}
+        </div>}
       </div>
 
       {structured !== undefined ? (
