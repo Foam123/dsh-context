@@ -137,7 +137,7 @@ function abortMerge(reason) {
 function resolveConflicts() {
   const unmerged = unmergedFiles()
   if (unmerged.length === 0) return
-  const known = unmerged.filter(file => REMOVED_FILES.includes(file) || LINE_RULES.has(file) || file.endsWith('base.css') || file.endsWith('tsdown.config.ts'))
+  const known = unmerged.filter(file => REMOVED_FILES.includes(file) || LINE_RULES.has(file) || file.endsWith('contextView.tsx') || file.endsWith('base.css') || file.endsWith('tsdown.config.ts'))
   const unknown = unmerged.filter(file => !known.includes(file))
   if (unknown.length > 0) abortMerge('conflicts outside the known removed cards, resolve them by hand:\n  ' + unknown.join('\n  '))
   for (const file of known) {
