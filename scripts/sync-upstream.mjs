@@ -21,11 +21,10 @@ const REMOVED_FILES = [
   'tests/shared/recoms.spec.ts',
 ]
 
-const I18N_REMOVAL = /^\s*'(recom\.title|plugin\.(title|hint|name|github))':/
+const I18N_REMOVAL = /^\s*'(recom\.|plugin\.(title|hint|name|github)')/
+const I18N_FILE = /^src\/client\/i18n.*\.ts$/
 
 const LINE_RULES = new Map([
-  ['src/client/i18nEn.ts', line => I18N_REMOVAL.test(line)],
-  ['src/client/i18nZh.ts', line => I18N_REMOVAL.test(line)],
   ['src/host/index.ts', line => /^\s*import \{ watchRecomChannel \} from '\.\/recoms'\s*$/.test(line) || /^\s*watchRecomChannel\(ctx\)\s*$/.test(line)],
   ['src/client/index.ts', line => /^\s*import '\.\/styles\/recom\.css'\s*$/.test(line)],
   ['src/client/apiRoutes.ts', line => /^\s*export const RECOM_ROUTE = /.test(line)],
@@ -56,7 +55,7 @@ function ensureUpstream() {
 
 function stripText(file, text) {
   const eol = text.includes('\r\n') ? '\r\n' : '\n'
-  const rule = LINE_RULES.get(file)
+  const rule = LINE_RULES.get(file) ?? (I18N_FILE.test(file) ? line => I18N_REMOVAL.test(line) : undefined)
   let next = text
   if (rule !== undefined) {
     next = next.split(/\r?\n/).filter(line => !rule(line)).join(eol)
@@ -80,11 +79,15 @@ function stripText(file, text) {
   return next.replace(/\r?\n{3,}/g, eol + eol)
 }
 
+function i18nFiles() {
+  return git(['ls-files', 'src/client']).split(/\r?\n/).filter(file => I18N_FILE.test(file))
+}
+
 function stripWorktree() {
   for (const file of REMOVED_FILES) {
     if (existsSync(resolve(ROOT, file))) git(['rm', '-q', '-f', '--', file])
   }
-  for (const file of LINE_RULES.keys()) {
+  for (const file of new Set([...LINE_RULES.keys(), ...i18nFiles()])) {
     const path = resolve(ROOT, file)
     if (!existsSync(path)) continue
     const before = readFileSync(path, 'utf8')
@@ -108,9 +111,7 @@ function verify() {
     const text = readFileSync(path, 'utf8')
     if (FORBIDDEN.test(text)) hits.push(file)
   }
-  if (hits.length > 0) {
-    fail('the following files still reference the removed cards, resolve them by hand:\n  ' + hits.join('\n  '))
-  }
+  return hits
 }
 
 function inMerge() {
@@ -137,7 +138,7 @@ function abortMerge(reason) {
 function resolveConflicts() {
   const unmerged = unmergedFiles()
   if (unmerged.length === 0) return
-  const known = unmerged.filter(file => REMOVED_FILES.includes(file) || LINE_RULES.has(file) || file.endsWith('contextView.tsx') || file.endsWith('base.css') || file.endsWith('tsdown.config.ts'))
+  const known = unmerged.filter(file => REMOVED_FILES.includes(file) || LINE_RULES.has(file) || I18N_FILE.test(file) || file.endsWith('contextView.tsx') || file.endsWith('base.css') || file.endsWith('tsdown.config.ts'))
   const unknown = unmerged.filter(file => !known.includes(file))
   if (unknown.length > 0) abortMerge('conflicts outside the known removed cards, resolve them by hand:\n  ' + unknown.join('\n  '))
   for (const file of known) {
@@ -169,7 +170,8 @@ function runGate() {
 function finishMerge() {
   resolveConflicts()
   stripWorktree()
-  verify()
+  const hits = verify()
+  if (hits.length > 0) abortMerge('these files still reference the removed cards:\n  ' + hits.join('\n  '))
   git(['add', '-A'])
   installIfNeeded()
   git(['add', '-A'])
