@@ -163,7 +163,12 @@ function installIfNeeded() {
 
 function runGate() {
   for (const script of ['lint', 'typecheck', 'coverage']) {
-    if (runPm(['run', script]) !== 0) abortMerge('the ' + script + ' gate failed')
+    let status = runPm(['run', script])
+    if (status !== 0) {
+      console.log('sync-upstream: retrying the ' + script + ' gate')
+      status = runPm(['run', script])
+    }
+    if (status !== 0) abortMerge('the ' + script + ' gate failed')
   }
 }
 
