@@ -30,6 +30,7 @@ const LINE_RULES = new Map([
   ['src/client/apiRoutes.ts', line => /^\s*export const RECOM_ROUTE = /.test(line)],
   ['src/client/styles/stats.css', line => /^\.lc-pi-[^{]*\{/.test(line)],
   ['tests/client/components/contextView.projectionGuards.spec.ts', line => line.includes('.lc-recom') || line.includes('.lc-pi-grid')],
+  ['tests/host/attachment.spec.ts', () => false],
 ])
 
 const BASE_HEAD_BLOCK = /\.lc-head \{ container: lc-head \/ inline-size; \}\r?\n\.lc-head > \.lc-col \{[^\n]*\}\r?\n@container lc-head \(min-width: 640px\) \{\r?\n[^\n]*\r?\n\}\r?\n/
@@ -75,6 +76,9 @@ function stripText(file, text) {
   }
   if (file.endsWith('tsdown.config.ts')) {
     next = next.replace(/,\s*'simple-icons'/, '')
+  }
+  if (file.endsWith('tests/host/attachment.spec.ts')) {
+    next = next.replace('const clock = 1_000_000', 'const clock = 1_700_000_000_000')
   }
   return next.replace(/\r?\n{3,}/g, eol + eol)
 }
