@@ -8,6 +8,7 @@ import { resetTimelineDetailStores } from '../../../src/client/timelineSource'
 import { TestClientCtx, asClientCtx } from '../helpers/harness'
 import { click, makeKit, mount, query, queryAll, text, typeText, until } from '../helpers/kit'
 import { projectionsFor, richTimeline } from './contextViewHarness'
+import { restoreLayout, stubRowRects } from '../helpers/layout'
 
 const TEAM = {
   members: [
@@ -69,6 +70,7 @@ async function settleEvents(m: Awaited<ReturnType<typeof mount>>, count = 2): Pr
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  restoreLayout()
   resetTimelineDetailStores()
 })
 
@@ -668,6 +670,7 @@ describe('Multi-Agent Fleet', () => {
   })
 
   test('complete history backfills beyond the preview cap without any user action', async () => {
+    stubRowRects('lc-comms-event', () => 60, 4)
     const total = 245
     const snapshot = {
       byId: {
@@ -686,8 +689,9 @@ describe('Multi-Agent Fleet', () => {
     const ctx = new TestClientCtx({ services: { sessions: { list: { getSnapshot: () => snapshot, subscribe: () => () => {} } } } })
     const View = makeView(ctx)
     const m = await mount(h(View, { sessionId: 'hist-root', useProjection: projectionsFor(richTimeline()) }))
-    await until(() => queryAll(m.container, '.lc-pulse-event').length === total, 'complete history never backfilled')
-    assert.equal(query(m.container, '[data-pulse-stat="messages"]').textContent, String(total))
+    await until(() => query(m.container, '[data-pulse-stat="messages"]').textContent === String(total), 'complete history never backfilled')
+    assert.ok(text(query(m.container, '.lc-pulse-timeline .lc-card-sub')).includes(`${total}/${total}`), 'the exact family record total reaches the summary chip')
+    assert.ok(queryAll(m.container, '.lc-pulse-event').length < total, 'the timeline DOM stays windowed')
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1 })
     const sequence = query<HTMLElement>(m.container, '[data-sequence-scroller]')
     Object.defineProperty(sequence, 'clientWidth', { configurable: true, value: 256 })
@@ -811,7 +815,11 @@ describe('Multi-Agent Fleet', () => {
       })),
     })
     vi.stubGlobal('fetch', (_url: unknown, init: { body: string }) => {
-      const { sessionId } = JSON.parse(init.body) as { sessionId: string }
+      const body = JSON.parse(init.body) as { sessionId?: string; ids?: string[] }
+      if (body.ids !== undefined) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, value: {} }) } as Response)
+      }
+      const sessionId = body.sessionId as string
       const index = Number(sessionId.slice(6))
       const value = Number.isInteger(index) && index > 0
         ? { messages: [], delegations: [{ seq: 1, time: 1000 + index, to: sessionId, mode: 'continuable', label: `Task ${index}` }], truncated: false }

@@ -1,4 +1,4 @@
-import type { Category, CommandRecord, CommandStats, ContextEventRecord, FileOpRecord, SessionCostUsage, SurfaceNode, SystemPromptNode, TimingSpan, TimingTotals } from '../shared/types'
+import type { Category, CommandRecord, CommandStats, ContextEventRecord, FileOpRecord, SessionCostUsage, SurfaceNode, SurfaceNodeWindow, SystemPromptNode, TimingSpan, TimingTotals } from '../shared/types'
 import type { SlimRequestRecord } from '../shared/types'
 import type { FoldBounds } from './config'
 
@@ -80,7 +80,7 @@ export function deriveHeadState(val: unknown): TimelineState | undefined {
   const commands = slimCommands(prev.commands)
   const pendingCodeCmds = slimPendingCommands(prev.pendingCodeCmds)
   const { pendingCodeCmds: _prevPending, ...rest } = prev
-  return {
+  const state = {
     ...rest,
     sums,
     surface,
@@ -91,6 +91,18 @@ export function deriveHeadState(val: unknown): TimelineState | undefined {
     fileOps: [],
     archived: [],
   } as unknown as TimelineState
+  for (const rec of commands) {
+    if (typeof rec.call === 'string') noteCommandCall(state, rec.call)
+  }
+  if (pendingCodeCmds !== undefined) {
+    for (const records of Object.values(pendingCodeCmds)) {
+      for (const rec of records) {
+        if (typeof rec.call === 'string') noteCommandCall(state, rec.call)
+      }
+    }
+  }
+  trimHeadState(state)
+  return state
 }
 
 export interface CommandStateRecord extends CommandRecord {
@@ -151,6 +163,7 @@ export interface TimelineState {
   maxOutputTokens?: number
   requests: SlimRequestRecord[]
   turnRuns?: number
+  totals?: CumulativeTotals
   events: ContextEventRecord[]
   archived: SurfaceNode[]
   cost?: SessionCostUsage
@@ -174,7 +187,7 @@ export interface TimelineState {
   stepBeatsFull?: boolean
   spans: TimingSpan[]
   stepSpans?: TimingSpan[]
-  callNames: Record<string, { name: string; start: number; argsRaw?: string }>
+  callNames: Record<string, { name: string; start: number; argsRaw?: string; transport?: true }>
   pendingShadowedSeqs?: number[]
   pendingShadowEventSeq?: number
   fileOps: FileOpRecord[]
@@ -182,8 +195,36 @@ export interface TimelineState {
   commands: CommandStateRecord[]
   commandsFloor?: number
   commandStats?: CommandStats
+  toolTally?: Record<string, number>
+  programTally?: Record<string, number>
+  commandCalls?: string[]
+  commandCallsOverflow?: boolean
   pendingCodeCmds?: Record<string, CommandStateRecord[]>
   pendingCodeOps?: Record<string, FileOpRecord[]>
+  pendingCodeStarts?: Record<string, number>
+}
+
+export function surfaceWindowOf(state: TimelineState, tail: number): SurfaceNodeWindow {
+  const overflowCount = Math.max(0, state.surface.length - tail)
+  const overflow = state.surface.slice(0, overflowCount)
+  const kept = state.surface.slice(overflowCount)
+  const pinned = overflow.filter(node => node.cat === 'inject' || node.cat === 'skill')
+  const nodes = pinned.length > 0 ? [...pinned, ...kept] : kept
+  const droppedNodes = overflowCount - pinned.length
+  const window: SurfaceNodeWindow = {
+    nodes,
+    droppedNodes,
+    archive: state.archived,
+  }
+  if (droppedNodes > 0) {
+    let floor = 0
+    for (const node of overflow) {
+      if (node.cat !== 'inject' && node.cat !== 'skill') floor = Math.max(floor, node.seq)
+    }
+    window.surfaceFloor = floor
+  }
+  if (state.archiveFloor !== undefined) window.archiveFloor = state.archiveFloor
+  return window
 }
 
 export function trimToLastTurns(requests: SlimRequestRecord[], maxTurns: number): SlimRequestRecord[] {
@@ -251,6 +292,10 @@ export function trimState(st: TimelineState, bounds: FoldBounds): void {
     st.commandsFloor = Math.max(st.commandsFloor ?? 0, floor)
     st.commands = kept
   }
+  if (bounds.headOnly === true) {
+    trimHeadState(st)
+    return
+  }
   if (st.archived.length > 0) {
     let drop = 0
     const oldestReq = st.requests.length > 0 ? st.requests[0].seq : undefined
@@ -269,7 +314,95 @@ export function trimState(st: TimelineState, bounds: FoldBounds): void {
   }
 }
 
-const TIMING_SPANS_MAX = 2_000
+const COMMAND_CALLS_MAX = 1024
+
+export function noteCommandCall(st: TimelineState, callId: string): void {
+  if (callId === '') return
+  const calls = st.commandCalls
+  if (calls === undefined) {
+    st.commandCalls = [callId]
+    return
+  }
+  if (calls.includes(callId)) return
+  calls.push(callId)
+  if (calls.length > COMMAND_CALLS_MAX) {
+    calls.splice(0, calls.length - COMMAND_CALLS_MAX)
+    st.commandCallsOverflow = true
+  }
+}
+
+export function trimHeadState(st: TimelineState): void {
+  if (st.requests.length > 2) st.requests = st.requests.slice(-2)
+  if (st.events.length > 0) st.events = []
+  if (st.commands.length > 0) st.commands = st.commands.filter(rec => rec.status === 'running').slice(-16)
+  if (st.fileOps.length > 0) st.fileOps = []
+  if (st.spans.length > 0) st.spans = []
+  if (st.archived.length > 0) st.archived = []
+}
+
+export const TIMING_SPANS_MAX = 2_000
+
+export const SKILL_NAMES_MAX = 500
+
+export const TALLY_NAMES_MAX = 128
+
+export const TALLY_NAME_CHARS_MAX = 120
+
+export interface CumulativeTotals {
+  turns: number
+  steps: number
+  injects: number
+  compactions: number
+  prunes: number
+  skills: Record<string, true>
+  lastTurn?: number
+}
+
+function emptyTotals(): CumulativeTotals {
+  return { turns: 0, steps: 0, injects: 0, compactions: 0, prunes: 0, skills: {} }
+}
+
+function ownedTotals(st: TimelineState): CumulativeTotals {
+  return st.totals === undefined ? emptyTotals() : { ...st.totals }
+}
+
+export function countStep(st: TimelineState): void {
+  const totals = ownedTotals(st)
+  totals.steps += 1
+  st.totals = totals
+}
+
+export function countInject(st: TimelineState): void {
+  const totals = ownedTotals(st)
+  totals.injects += 1
+  st.totals = totals
+}
+
+export function countCompaction(st: TimelineState, kind: 'compaction' | 'prune'): void {
+  const totals = ownedTotals(st)
+  if (kind === 'compaction') totals.compactions += 1
+  else totals.prunes += 1
+  st.totals = totals
+}
+
+export function noteTurn(st: TimelineState, turn: number | undefined): void {
+  const label = turn !== undefined && Number.isFinite(turn) ? turn : 0
+  if (st.totals?.lastTurn === label) return
+  const totals = ownedTotals(st)
+  totals.turns += 1
+  totals.lastTurn = label
+  st.totals = totals
+}
+
+export function noteSkillName(st: TimelineState, name: string): void {
+  if (name === '' || name === '__proto__') return
+  const current = st.totals
+  if (current !== undefined && Object.hasOwn(current.skills, name)) return
+  if (current !== undefined && Object.keys(current.skills).length >= SKILL_NAMES_MAX) return
+  const totals = ownedTotals(st)
+  totals.skills = { ...totals.skills, [name]: true }
+  st.totals = totals
+}
 
 export function createTimelineState(): TimelineState {
   return {
@@ -282,6 +415,7 @@ export function createTimelineState(): TimelineState {
     toolsTokens: 0,
     requests: [],
     turnRuns: 0,
+    totals: emptyTotals(),
     events: [],
     archived: [],
     callNames: {},

@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, type ReactElement } from 'react'
 import type { ContextEventRecord } from '../../shared/types'
 import { IconBranch, IconPlus } from '../primitives'
+import { formLabelOf, modeLabelOf } from '../labels'
 import type { Translate } from '../i18n'
 import type { DetailState } from '../timelineSource'
 import type { ViewKit } from '../viewkit'
 import { makeDetailNote } from './detailNote'
+import { remoteStateOf } from './useRemoteState'
 
 const EVENT_ICONS: Record<string, string> = { compaction: '✂', prune: '✂', mode: '⇄' }
 
@@ -30,10 +32,10 @@ export function makeEventText(t: Translate): {
     if (ev.kind === 'compaction') return { lead: '', tail: t('ev.compaction', { n: ev.count || 0 }) }
     if (ev.kind === 'prune') return { lead: '', tail: t('ev.prune') }
     if (ev.kind === 'model') return { lead: '', tail: t('ev.model', { a: ev.from || '?', b: ev.to || '?' }) }
-    if (ev.kind === 'mode') return { lead: '', tail: t('ev.mode.' + (ev.name || '?')) }
+    if (ev.kind === 'mode') return { lead: '', tail: modeLabelOf(t, ev.name) }
     if (ev.sub === 'skill') return { lead: t('ev.skillLead'), tail: ' · ' + (ev.name || '?') }
     return {
-      lead: t('form.' + (ev.form || 'context')),
+      lead: formLabelOf(t, ev.form),
       tail: (ev.name ? ' · ' + ev.name : '') + (ev.detail ? ' · ' + ev.detail : ''),
     }
   }
@@ -64,8 +66,16 @@ export function makeEventText(t: Translate): {
 }
 
 function syncTitles(root: HTMLElement): void {
-  for (const el of root.querySelectorAll<HTMLElement>('.lc-event-label')) {
-    el.title = el.scrollWidth > el.clientWidth ? el.textContent || '' : ''
+  const labels = root.querySelectorAll<HTMLElement>('.lc-event-label')
+  const clipped: HTMLElement[] = []
+  for (const el of labels) {
+    if (el.scrollWidth > el.clientWidth) clipped.push(el)
+  }
+  for (const el of labels) {
+    el.title = ''
+  }
+  for (const el of clipped) {
+    el.title = el.textContent || ''
   }
 }
 
@@ -81,20 +91,25 @@ export function makeEventList(kit: ViewKit): (props: EventListProps) => ReactEle
       syncTitles(root)
     }, [props.events])
     useEffect(() => {
+      let frame = 0
       const onResize = (): void => {
-        const root = rootRef.current
-        if (root !== null) syncTitles(root)
+        if (frame !== 0) return
+        frame = requestAnimationFrame(() => {
+          frame = 0
+          const root = rootRef.current
+          if (root !== null) syncTitles(root)
+        })
       }
       window.addEventListener('resize', onResize)
-      return () => { window.removeEventListener('resize', onResize) }
-    }, [])
-    if (props.events.length === 0) {
-      if (props.state === 'loading') return <DetailNote state="loading" className="lc-empty lc-lane" />
-      if (props.state === 'failed' && props.onRetry !== undefined) {
-        return <DetailNote state="failed" onRetry={props.onRetry} className="lc-empty lc-lane" />
+      return () => {
+        window.removeEventListener('resize', onResize)
+        if (frame !== 0) cancelAnimationFrame(frame)
       }
-      return <div className="lc-empty lc-lane">{t('events.empty')}</div>
-    }
+    }, [])
+    const remote = remoteStateOf(props.events.length, props.state, props.onRetry)
+    if (remote.kind === 'loading') return <DetailNote state="loading" className="lc-empty lc-lane" />
+    if (remote.kind === 'failed') return <DetailNote state="failed" onRetry={remote.retry} className="lc-empty lc-lane" />
+    if (remote.kind === 'empty') return <div className="lc-empty lc-lane">{t('events.empty')}</div>
     const sorted = props.events.slice().reverse()
     return (
       <div className="lc-events" ref={rootRef}>

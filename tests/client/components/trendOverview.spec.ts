@@ -2,7 +2,7 @@
 import { act, createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
-import { aggregateByTurn } from '../../../src/client/components/trendChart'
+import { aggregateByTurn } from '../../../src/client/components/trendModel'
 import { makeTrendOverview, type TrendOverviewProps } from '../../../src/client/components/trendOverview'
 import type { ContextEventRecord, RequestRecord } from '../../../src/shared/types'
 import { click, hover, mount, query, queryAll, unhover } from '../helpers/kit'
@@ -231,6 +231,14 @@ describe('TrendOverview flags and markers', () => {
     const one = await mount(h(TrendOverview, propsOf([req(1, { turn: 1, step: 0 })])))
     assert.equal(queryAll(one.container, '.lc-trend-flag').length, 0)
     await one.unmount()
+  })
+
+  test('a turn-less history falls back to turn zero on the flag axis and the strip labels', async () => {
+    const records = [1, 2, 3].map(seq => ({ ...req(seq), turn: undefined } as RequestRecord))
+    const m = await mount(h(TrendOverview, propsOf(records, { granularity: 'turn' })))
+    assert.deepEqual(queryAll(m.container, '.lc-trend-flag-label').map(l => l.textContent), ['0', '0'])
+    assert.deepEqual(queryAll(m.container, '.lc-turn-label').map(l => l.textContent), ['0'])
+    await m.unmount()
   })
 
   test('turn poles and strip blocks share the absolute, equal-width turn axis rather than step-span widths', async () => {
@@ -525,6 +533,60 @@ describe('TrendOverview turn strip', () => {
     assert.deepEqual(spies.pickTurn, [1])
     await unhover(query(m.container, '.lc-turns'))
     assert.deepEqual(spies.hoverTurn, [1, null])
+    await m.unmount()
+  })
+})
+
+describe('TrendOverview keyboard picks', () => {
+  test('arrows walk the records, Enter and Space pin the cursor record, and turn chips pick turns', async () => {
+    const pickedSeqs: Array<number | null> = []
+    const turns: number[] = []
+    const m = await mount(h(TrendOverview, propsOf([
+      req(1, { turn: 1, step: 0 }),
+      req(2, { turn: 1, step: 1 }),
+      req(3, { turn: 2, step: 0 }),
+    ], { onSelect: (seq: number | null) => { pickedSeqs.push(seq) }, onPickTurn: turn => { turns.push(turn) } })))
+    const chart = query(m.container, '.lc-chart')
+    assert.equal(chart.getAttribute('role'), 'button')
+    await act(async () => { chart.dispatchEvent(new FocusEvent('focusin', { bubbles: true })) })
+    await act(async () => { chart.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })) })
+    await act(async () => { chart.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true })) })
+    await act(async () => { chart.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true })) })
+    await act(async () => { chart.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true })) })
+    await act(async () => { chart.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    assert.deepEqual(pickedSeqs.slice(), [1])
+    await m.update(h(TrendOverview, propsOf([
+      req(1, { turn: 1, step: 0 }),
+      req(2, { turn: 1, step: 1 }),
+      req(3, { turn: 2, step: 0 }),
+    ], { selectedSeq: 3, onSelect: (seq: number | null) => { pickedSeqs.push(seq) }, onPickTurn: turn => { turns.push(turn) } })))
+    await act(async () => { query(m.container, '.lc-chart').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    assert.deepEqual(pickedSeqs.slice(), [1, 1])
+    await act(async () => { chart.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })) })
+    assert.deepEqual(pickedSeqs.slice(), [1, 1, 1])
+    await act(async () => { chart.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true })) })
+    await act(async () => { chart.dispatchEvent(new FocusEvent('focusout', { bubbles: true })) })
+    const chartTurns = queryAll(m.container, '.lc-turn')
+    await act(async () => { chartTurns[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true })) })
+    await act(async () => { chartTurns[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    await act(async () => { chartTurns[1].dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })) })
+    assert.deepEqual(turns, [2, 2])
+    const picked = await mount(h(TrendOverview, propsOf([req(1, { turn: 1, step: 0 })], {
+      hoveredSeq: 1,
+      onSelect: (seq: number | null) => { pickedSeqs.push(seq) },
+    })))
+    const pickedChart = query(picked.container, '.lc-chart')
+    await act(async () => { pickedChart.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    assert.deepEqual(pickedSeqs.slice(), [1, 1, 1, 1])
+    await picked.unmount()
+
+    const pinned = await mount(h(TrendOverview, propsOf([req(1, { turn: 1, step: 0 }), req(2, { turn: 1, step: 1 })], {
+      selectedSeq: 2,
+      onSelect: (seq: number | null) => { pickedSeqs.push(seq) },
+    })))
+    await act(async () => { query(pinned.container, '.lc-chart').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    assert.deepEqual(pickedSeqs.slice(), [1, 1, 1, 1, null])
+    await pinned.unmount()
     await m.unmount()
   })
 })

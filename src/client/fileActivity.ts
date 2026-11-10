@@ -1,12 +1,12 @@
 import type { FileOpRecord, RequestRecord, SurfaceNode } from '../shared/types'
-import { opsOfCall, parseCallArgs } from '../shared/fileOps'
+import { isImageFileOp, opsOfCall, parseCallArgs } from '../shared/fileOps'
 import { leafNameOf } from '../shared/attachment'
 import { fileAddressFor, isAbsoluteWorkspacePath, resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
 import type { ConversationNodeLike } from './services'
 
 export type FileOp = FileOpRecord
 export type FileOpKind = FileOpRecord['kind']
-export type FileForm = 'text' | 'image' | 'dir'
+type FileForm = 'text' | 'image' | 'dir'
 
 export interface FileEntry {
   path: string
@@ -24,7 +24,7 @@ export function surfaceSeqOf(op: FileOp): number {
   return op.parent ?? op.seq
 }
 
-export interface FileKindTotal { files: number; ops: number }
+interface FileKindTotal { files: number; ops: number }
 
 export interface FileActivity {
   entries: FileEntry[]
@@ -32,12 +32,10 @@ export interface FileActivity {
 }
 
 export function formOf(tool: string, path: string): FileForm {
-  if (tool === 'read_image' || IMAGE_EXT.test(path)) return 'image'
+  if (isImageFileOp(tool, path)) return 'image'
   if (path.endsWith('/') || path.endsWith('\\')) return 'dir'
   return 'text'
 }
-
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i
 
 export interface FileGlyph {
   glyph: string
@@ -225,7 +223,7 @@ export function displayPathOf(path: string, workspace: string | undefined): stri
     : posixDisplayPathOf(path, workspace)
 }
 
-export type DisplayStyle = 'windows' | 'posix'
+type DisplayStyle = 'windows' | 'posix'
 
 export function displayStyleOf(path: string, workspace: string | undefined): DisplayStyle {
   if (path.startsWith('/')) return 'posix'

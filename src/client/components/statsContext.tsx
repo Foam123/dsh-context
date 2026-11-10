@@ -1,59 +1,65 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactElement, type ReactNode } from 'react'
-import type { ContextEventRecord, ContextTimeline, RequestRecord, SessionCostUsage, SurfaceNode, TimelineCounts } from '../../shared/types'
-import { estimateSessionCost, billedTokensOf, formatCost, formatPriceRate, mergeCostUsage, priceLookupsOf, toCurrency } from '../cost'
-import type { CostCurrency, ModelBook, PriceFace, PriceMiss } from '../cost'
+import type {
+  ContextTimeline, CostPriceFace, CostPriceMiss, SessionCostRead,
+  SessionCostUsage, TimelineCounts,
+} from '../../shared/types'
+import { billedTokensOf, formatCost, formatPriceRate, mergeCostUsage, toCurrency, type CostCurrency } from '../cost'
 import { sessionsFaceOf, subagentCostFoldOf } from '../agentTree'
-import { useSessionsSnapshot } from '../agentHeads'
+import { readHeads, useSessionsSnapshot } from '../agentHeads'
+import { subscribeInvalidations } from '../invalidation'
 import type { AgentHeads } from '../agentHeads'
 import type { Translate } from '../i18n'
-import { useModelPrices } from '../modelPrices'
 import { nameColorOf } from '../nameColor'
 import { type ClientCtx } from '../services'
 import { isDeepSeekProvider } from '../../shared/providers'
 import type { ViewKit } from '../viewkit'
 import { IconData } from '../primitives'
+import { useElementSize } from './useElementMetrics'
 
-interface PriceRow { key: string; face: PriceFace }
-interface PriceMissRow { key: string; provider: string; model: string; miss: PriceMiss }
+interface PriceRow { key: string; face: CostPriceFace }
+interface PriceMissRow { key: string; provider: string; model: string; miss: CostPriceMiss }
 
-const BANDS: readonly (readonly [keyof PriceFace['rate'], string])[] = [
+const BANDS: readonly (readonly [keyof CostPriceFace['rate'], string])[] = [
   ['hit', 'stats.costHit'],
   ['miss', 'stats.costMiss'],
   ['write', 'stats.costWrite'],
   ['out', 'stats.costOut'],
 ]
 
-function pricesOf(usage: SessionCostUsage | undefined, book: ModelBook | null): { rows: PriceRow[]; misses: PriceMissRow[] } {
-  if (usage === undefined || book === null) return { rows: [], misses: [] }
-  const rows: PriceRow[] = []
-  const misses: PriceMissRow[] = []
-  for (const lookup of priceLookupsOf(usage, book)) {
-    const key = lookup.provider + '/' + lookup.model
-    if (lookup.face !== null) rows.push({ key, face: lookup.face })
-    else misses.push({ key, provider: lookup.provider, model: lookup.model, miss: lookup.miss })
+function facesStateOf(reads: readonly (SessionCostRead | null | undefined)[]): { rows: PriceRow[]; misses: PriceMissRow[] } {
+  const rows = new Map<string, PriceRow>()
+  const misses = new Map<string, PriceMissRow>()
+  for (const read of reads) {
+    if (read === null || read === undefined) continue
+    for (const face of read.faces ?? []) {
+      const key = face.provider + '/' + face.model
+      if (!rows.has(key)) rows.set(key, { key, face })
+    }
+    for (const miss of read.misses ?? []) {
+      const key = miss.provider + '/' + miss.model
+      if (!misses.has(key)) misses.set(key, { key, provider: miss.provider, model: miss.model, miss })
+    }
   }
-  return { rows, misses }
+  return { rows: [...rows.values()], misses: [...misses.values()] }
 }
 
-export function countsOfRecords(requests: readonly RequestRecord[], events: readonly ContextEventRecord[]): TimelineCounts {
-  const turns = new Set<number>()
-  for (const req of requests) turns.add(req.turn ?? 0)
-  let injects = 0
-  let compactions = 0
-  let prunes = 0
-  const skills = new Set<string>()
-  for (const ev of events) {
-    if (ev.kind === 'inject') injects++
-    else if (ev.kind === 'compaction') compactions++
-    else if (ev.kind === 'prune') prunes++
-    if (ev.sub === 'skill' && typeof ev.name === 'string' && ev.name !== '') skills.add(ev.name)
+function costUsdOf(reads: readonly (SessionCostRead | null | undefined)[]): number | null {
+  let total = 0
+  let any = false
+  for (const read of reads) {
+    if (read === null || read === undefined) continue
+    if (!read.ready) return null
+    if (read.usd === null) continue
+    total += read.usd
+    any = true
   }
-  return { turns: turns.size, steps: requests.length, injects, compactions, prunes, skills: skills.size }
+  return any ? total : null
 }
 
 export interface SubagentStats {
   usage: SessionCostUsage | null
   count: number
+  costRead: SessionCostRead | null
 }
 
 export function makeSubagentCost(
@@ -68,15 +74,32 @@ export function makeSubagentCost(
       () => subagentCostFoldOf(snapshot, sessionId, landed),
       [snapshot, sessionId, landed],
     )
+    useEffect(() => subscribeInvalidations((event) => {
+      if (event.kind !== 'pricing') return
+      setLanded((prev) => {
+        for (const head of prev.values()) {
+          if (head.costRead?.ready !== true) return new Map()
+        }
+        return prev
+      })
+    }), [])
     useEffect(() => {
-      for (const id of fold.cold) {
-        void heads.headOf(id).then((head) => {
-          /* v8 ignore next 1 */
-          if (head !== null) setLanded(prev => prev.get(id) === head ? prev : new Map(prev).set(id, head))
-        }).catch(() => {})
+      const cold = fold.cold
+      if (cold.length === 0) return
+      const land = (head: ContextTimeline | null | undefined, id: string): void => {
+        /* v8 ignore next 1 */
+        if (head !== null && head !== undefined) setLanded(prev => prev.get(id) === head ? prev : new Map(prev).set(id, head))
       }
+      if (cold.length > 1) {
+        void readHeads(heads, cold).then((reads) => {
+          for (const id of cold) land(reads.get(id), id)
+        }).catch(() => {})
+        return
+      }
+      const [only] = cold
+      void heads.headOf(only).then((head) => { land(head, only) }).catch(() => {})
     }, [fold, heads])
-    return { usage: fold.usage, count: fold.count }
+    return { usage: fold.usage, count: fold.count, costRead: fold.costRead }
   }
 }
 
@@ -87,16 +110,6 @@ const EVENT_PILLS: readonly { kind: StatsEventKind; tally: 'injects' | 'compacti
   { kind: 'compaction', tally: 'compactions', cls: 'lc-kind-compaction' },
   { kind: 'prune', tally: 'prunes', cls: 'lc-kind-prune' },
 ]
-
-export function toolTallyOf(nodes: readonly SurfaceNode[]): [string, number][] {
-  const tally = new Map<string, number>()
-  for (const n of nodes) {
-    if (n.cat !== 'tool' && !(n.cat === 'skill' && n.tool !== undefined)) continue
-    if (typeof n.tool !== 'string' || n.tool === '') continue
-    tally.set(n.tool, (tally.get(n.tool) ?? 0) + 1)
-  }
-  return [...tally].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
-}
 
 export type StatsJump = 'turns' | 'steps' | 'skills' | 'answers' | 'inputs' | 'read' | 'write' | 'search' | 'image'
 
@@ -159,6 +172,7 @@ interface StatsContextProps {
   tools: readonly (readonly [string, number])[]
   commands?: { runs: number; top: readonly (readonly [string, number])[] }
   cost?: SessionCostUsage
+  costRead?: SessionCostRead
   locale: string
   sessionId?: string
 }
@@ -182,6 +196,7 @@ function useFittedChips(tally: readonly unknown[]) {
   const rowRef = useRef<HTMLDivElement | null>(null)
   const gaugeRef = useRef<HTMLDivElement | null>(null)
   const chipGaugeRef = useRef<HTMLDivElement | null>(null)
+  const widthsRef = useRef<{ tally: readonly unknown[]; widths: number[]; moreWidths: number[] } | null>(null)
   const [shown, setShown] = useState(count)
 
   const fit = useCallback(() => {
@@ -196,14 +211,28 @@ function useFittedChips(tally: readonly unknown[]) {
       setShown(count)
       return
     }
-    const widths = Array.from(gauge.children, el => el.getBoundingClientRect().width)
+    let cached = widthsRef.current
+    if (cached !== null && cached.tally === tally) {
+      const first = gauge.children[0] as HTMLElement | undefined
+      if (first === undefined || first.getBoundingClientRect().width !== cached.widths[0]) cached = null
+    } else {
+      cached = null
+    }
+    if (cached === null) {
+      cached = {
+        tally,
+        widths: Array.from(gauge.children, el => el.getBoundingClientRect().width),
+        moreWidths: Array.from(chipGauge.children, el => el.getBoundingClientRect().width),
+      }
+      widthsRef.current = cached
+    }
+    const { widths, moreWidths } = cached
     let whole = 0
     for (let i = 0; i < count; i++) whole += widths[i] + (i === 0 ? 0 : CHIP_GAP)
     if (whole <= width) {
       setShown(count)
       return
     }
-    const moreWidths = Array.from(chipGauge.children, el => el.getBoundingClientRect().width)
     let pills = 0
     for (let n = count - 1; n >= 0; n--) {
       let used = moreWidths[count - n - 1] + n * CHIP_GAP
@@ -216,16 +245,8 @@ function useFittedChips(tally: readonly unknown[]) {
     setShown(prev => (prev === pills ? prev : pills))
   }, [tally])
 
-  useLayoutEffect(fit, [fit])
-  /* v8 ignore start */
-  useEffect(() => {
-    const row = rowRef.current
-    if (row === null || typeof ResizeObserver !== 'function') return
-    const observer = new ResizeObserver(fit)
-    observer.observe(row)
-    return () => { observer.disconnect() }
-  }, [fit])
-  /* v8 ignore stop */
+  const rowSize = useElementSize(rowRef)
+  useLayoutEffect(fit, [fit, rowSize.width])
   return { shown, rowRef, gaugeRef, chipGaugeRef }
 }
 
@@ -302,15 +323,20 @@ export function makeStatsContext(
   const { t, fmt } = kit
   return function StatsContext(props: StatsContextProps): ReactElement {
     const currency: CostCurrency = props.locale === 'zh' ? 'cny' : 'usd'
-    const { book, failed } = useModelPrices()
     const sub = useSubagentCost(props.sessionId)
     const subUsage = sub.usage
     const usage = mergeCostUsage(props.cost, subUsage) ?? undefined
-    const cost = estimateSessionCost(usage, book, currency)
-    const subCost = estimateSessionCost(subUsage, book, currency)
+    const ownRead = props.costRead
+    const subRead = sub.costRead
+    const familyUsd = costUsdOf([ownRead, subRead])
+    const subUsd = costUsdOf([subRead])
+    const ownUsd = costUsdOf([ownRead])
+    const cost = familyUsd === null ? null : toCurrency(familyUsd, currency)
+    const subCost = subUsd === null ? null : toCurrency(subUsd, currency)
     const fmtRate = (usd: number): string => formatPriceRate(toCurrency(usd, currency), currency)
-    const priceState = pricesOf(usage, book)
-    const subPriceState = pricesOf(subUsage ?? undefined, book)
+    const failed = ownRead !== undefined && !ownRead.ready || subRead !== null && !subRead.ready
+    const priceState = facesStateOf([ownRead, subRead])
+    const subPriceState = facesStateOf([subRead])
     const rows = priceState.rows
     const deepseek = usage !== undefined && Object.keys(usage).some(p => isDeepSeekProvider(p))
     const subDeepseek = subUsage !== null && Object.keys(subUsage).some(p => isDeepSeekProvider(p))
@@ -327,7 +353,7 @@ export function makeStatsContext(
                   <b>{fmtRate(r.face.rate[bucket])}</b>
                 </span>
               ))}
-              <span className="lc-stat-tip-by">{t('stats.costPriceBy', { p: r.face.pid, m: r.face.mid })}</span>
+              <span className="lc-stat-tip-by">{t('stats.costPriceBy', { p: r.face.provider, m: r.face.model })}</span>
             </span>
           ))}
         </span>
@@ -364,7 +390,7 @@ export function makeStatsContext(
     ]
     const costTip: ReactNode = tipFor(priceState, t('stats.costTip'), deepseek)
     const subTip: ReactNode = tipFor(subPriceState, t('stats.subCostTip'), subDeepseek)
-    const ownPriceState = pricesOf(props.cost, book)
+    const ownPriceState = facesStateOf([ownRead])
     const ownDeepseek = props.cost !== undefined && Object.keys(props.cost).some(p => isDeepSeekProvider(p))
     const ownTip: ReactNode = tipFor(ownPriceState, t('stats.ownCostTip'), ownDeepseek)
     const onJump = props.onJump
@@ -413,9 +439,9 @@ export function makeStatsContext(
         </span>
       )
     }
-    const costPids = new Set(rows.map(r => r.face.pid).filter(p => p !== ''))
+    const costPids = new Set(rows.map(r => r.face.provider).filter(p => p !== ''))
     const costHref = costPids.size === 1 ? 'https://models.dev/providers/' + [...costPids][0] + '/' : undefined
-    const ownCost = estimateSessionCost(props.cost, book, currency)
+    const ownCost = ownUsd === null ? null : toCurrency(ownUsd, currency)
     const familyTokens = billedTokensOf(usage)
     const ownTokens = billedTokensOf(props.cost)
     const subTokens = billedTokensOf(subUsage)

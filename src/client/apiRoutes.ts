@@ -1,5 +1,9 @@
 export const DETAIL_ROUTE = 'api/dsh-context/detail'
 
+export const FACTS_ROUTE = 'api/dsh-context/facts'
+
+export const HEADS_ROUTE = 'api/dsh-context/heads'
+
 export const COMMANDS_ROUTE = 'api/dsh-context/commands'
 
 export const BALANCE_ROUTE = 'api/dsh-context/balance'
@@ -13,3 +17,7 @@ export const BACKFILL_ROUTE = 'api/dsh-context/backfill'
 export const ATTACHMENT_ROUTE = 'api/dsh-context/attachment'
 
 export const SNAPSHOT_ROUTE = 'api/dsh-context/snapshot'
+
+export const OVERVIEW_ROUTE = 'api/dsh-context/overview'
+
+export const VERSION_ROUTE = 'api/dsh-context/version'

@@ -68,6 +68,59 @@ describe('ContextView — the split generation (slim head + detail channel)', ()
     await m.unmount()
   })
 
+  test('the head tallies paint the tool and command stats before the detail lands', async () => {
+    vi.stubGlobal('fetch', () => new Promise(() => {}))
+    const ctx = new TestClientCtx()
+    const View = makeView(ctx)
+    const head = slimHead({
+      toolTally: { bash: 2, read: 1 },
+      programTally: { ls: 3, cat: 1 },
+      commandStats: { runs: 3, failed: 0, ms: 10, bg: 0 },
+    })
+    const m = await mount(h(View, { sessionId: 'sv-tally', useProjection: projectionsFor(head) }))
+    await until(() => text(m.container).includes('bash'), 'the tool tally never painted')
+    assert.ok(text(m.container).includes('ls'), 'the command tally paints from the head')
+    assert.ok(text(m.container).includes('read'))
+    await m.unmount()
+  })
+
+  test('the facts core series carries the category breakdown for the trend and per-step composition', async () => {
+    const rich = richTimeline()
+    const head = slimHead()
+    vi.stubGlobal('fetch', async (_url: unknown, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { parts?: string[] }
+      const parts = body.parts ?? []
+      let value: unknown
+      if (parts.includes('head')) value = { rev: 6, live: false, parts: { head, series: rich.requests } }
+      else if (parts.includes('nodes')) value = { rev: 6, parts: { nodes: { nodes: rich.nodes, archive: [], droppedNodes: 0 } } }
+      else if (parts.includes('events')) value = { rev: 6, parts: { events: rich.events } }
+      else if (parts.includes('files')) value = { rev: 6, parts: { files: { fileOps: [] } } }
+      else if (parts.includes('spans')) value = { rev: 6, parts: { spans: [] } }
+      else if (parts.includes('commands')) value = { rev: 6, parts: { commands: { commands: [], commandsFloor: 0 } } }
+      else value = { rev: 6, parts: {} }
+      return { ok: true, status: 200, json: async () => ({ ok: true, value }) }
+    })
+    const ctx = new TestClientCtx()
+    const View = makeView(ctx)
+    const m = await mount(h(View, { sessionId: 'sv-facts', useProjection: projectionsFor(head) }))
+    await until(() => queryAll(m.container, '.lc-bar').length === 3, 'the facts series never reached the trend')
+    const segments = queryAll(m.container, '.lc-cat-seg')
+    assert.ok(segments.length > 0, 'the trend needs per-category request buckets, not only totals')
+    assert.ok(/Actual|实际/.test(text(m.container)), 'the step composition reads the same full request')
+    await m.unmount()
+  })
+
+  test('a head with program tallies but no command stats paints the programs and a zero run count', async () => {
+    vi.stubGlobal('fetch', () => new Promise(() => {}))
+    const ctx = new TestClientCtx()
+    const View = makeView(ctx)
+    const head = slimHead({ toolTally: { bash: 1 }, programTally: { ls: 2 } })
+    const m = await mount(h(View, { sessionId: 'sv-tally2', useProjection: projectionsFor(head) }))
+    await until(() => text(m.container).includes('ls'), 'the program tally never painted')
+    assert.ok(text(m.container).includes('bash'))
+    await m.unmount()
+  })
+
   test('the pending trend body reserves the loaded panel, so the detail fills the card instead of growing it', async () => {
     let release!: () => void
     vi.stubGlobal('fetch', () => new Promise(res => {

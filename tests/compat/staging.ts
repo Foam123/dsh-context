@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Baseline } from '../baselines'
 
 export const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-export const DSH_REPO = process.env.DSH_REPO || join(process.env.HOME, 'dev', 'deepseek-harness')
+export const DSH_REPO = process.env.DSH_REPO || join(homedir(), 'dev', 'deepseek-harness')
 export const STAGE = join(REPO, '.tmp', 'compat')
 
 export function checkoutMissing(): boolean {
@@ -147,10 +148,12 @@ export interface DriverReport {
   coldMatches: boolean
   developerTokens: number | null
   developerRequestTokens: number | null
+  developerInjectCount: number | null
   developerRestoreMatches: boolean
   hostileSnapshotOk: boolean
   hostilePrompt: number | null
   hostileCacheRead: number | null
+  hostileSteps: number | null
   poisonedEscapedDrive: number
   poisonedStarves: boolean
   poisonedSnapshotThrows: boolean
@@ -215,15 +218,19 @@ const values = registryC.snapshot(sessionC).values
 const node = values.contextTimeline.nodes.find(n => n.seq === 2)
 developerTokens = node ? node.tokens : null
 const developerState = registryC.checkpoint(sessionC).contextTimeline.val
-developerInjectCount = Array.isArray(developerState.events) ? developerState.events.filter(e => e.kind === 'inject').length : null
+developerInjectCount = typeof developerState.totals?.injects === 'number'
+  ? developerState.totals.injects
+  : Array.isArray(developerState.events) ? developerState.events.filter(e => e.kind === 'inject').length : null
 const rows = snapshotJsonValue(registryC.checkpoint(sessionC))
 const warm = registryC.restore(rows, registryLog, 0, sessionC.header)
 const oldLog = registryLog.map(e => e.type === 'developer/message' ? { ...e, type: 'todo/write' } : e)
 const oldRows = registryC.restore({}, oldLog, 0, sessionC.header).checkpoint
 oldRows.contextTimeline.ver = 24
 const rebuilt = registryC.restore(oldRows, registryLog, 0, sessionC.header)
-developerRestoreMatches = JSON.stringify(warm.snapshot.values) === JSON.stringify(values)
-  && JSON.stringify(rebuilt.snapshot.values) === JSON.stringify(values)
+const HEAD_VIEW_FIELDS = ['current', 'counts', 'cost', 'last', 'model', 'provider', 'reasoningEffort', 'contextWindow', 'maxOutputTokens', 'images', 'toolCalls', 'toolTally', 'programTally', 'commandStats', 'humanInputs', 'answers', 'lastUser', 'generatedReasoning', 'generatedAnswerTokens', 'generatedCallTokens', 'detailRev', 'timing', 'systems']
+const headViewOf = (view) => JSON.stringify(Object.fromEntries(HEAD_VIEW_FIELDS.filter(field => view?.[field] !== undefined).map(field => [field, view[field]])))
+developerRestoreMatches = headViewOf(warm.snapshot.values.contextTimeline) === headViewOf(values.contextTimeline)
+  && headViewOf(rebuilt.snapshot.values.contextTimeline) === headViewOf(values.contextTimeline)
 
 const hostile = [
   ev(12, 'step/start'),
@@ -234,9 +241,14 @@ drive(ctx, session, hostile)
 let hostileSnapshotOk = true
 let hostileSteps = null
 try {
-  registry.snapshot(session)
+  const hostileSnapshot = registry.snapshot(session).values
+  const hostileView = hostileSnapshot.contextTimeline
   const hostileState = registry.checkpoint(session).contextTimeline.val
-  hostileSteps = Array.isArray(hostileState.requests) ? hostileState.requests.length : null
+  hostileSteps = typeof hostileView?.counts?.steps === 'number'
+    ? hostileView.counts.steps
+    : typeof hostileState.totals?.steps === 'number'
+      ? hostileState.totals.steps
+      : Array.isArray(hostileState.requests) ? hostileState.requests.length : null
 } catch {
   hostileSnapshotOk = false
 }
@@ -320,9 +332,18 @@ export function runDriver(baseline: Baseline): DriverReport {
   return JSON.parse(line.slice('DRIVER-JSON '.length)) as DriverReport
 }
 
+export function moduleRequiresOf(source: string): string[] {
+  const callee = /factory\s*:\s*(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)/.exec(source)?.[1] ?? 'require'
+  const calls = [...source.matchAll(/([A-Za-z_$][\w$]*)\("([^"]+)"\)/g)]
+    .filter(match => match[1] === callee)
+    .map(match => match[2])
+  return [...new Set(calls)]
+}
+
 export function bundleRequires(): string[] {
-  const source = readFileSync(join(REPO, 'lib', 'client.js'), 'utf8')
-  return [...new Set([...source.matchAll(/require\("([^"]+)"\)/g)].map(m => m[1]))]
+  const requires = moduleRequiresOf(readFileSync(join(REPO, 'lib', 'client.js'), 'utf8'))
+  if (requires.length === 0) throw new Error('lib/client.js declares no module-table requires; the scrape no longer matches the bundle format')
+  return requires
 }
 
 export const SLOT_SEAMS = [

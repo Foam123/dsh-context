@@ -1,8 +1,12 @@
+import { amountOf } from '../shared/decode'
 import type { PlatformBalance, PlatformBalanceEntry } from '../shared/types'
 import { BALANCE_ROUTE } from './apiRoutes'
+import { postRouteQuietly } from './route'
 import { asRecord } from './services'
 
 const STORAGE_KEY = 'dsh-context:platform-balance'
+
+export const BALANCE_STORAGE_TTL_MS = 10 * 60 * 1000
 
 export interface StorageFace {
   getItem(key: string): string | null
@@ -15,11 +19,6 @@ export function setPlatformBalanceStorage(next: StorageFace | null | undefined):
 }
 
 export const PLATFORM_BALANCE_STORAGE_KEY = STORAGE_KEY
-
-function amountOf(value: unknown): number | null {
-  const n = typeof value === 'string' ? Number(value) : value
-  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null
-}
 
 export function platformBalanceOf(value: unknown): PlatformBalance | null {
   const data = asRecord(value)
@@ -75,7 +74,16 @@ function storageFn(): StorageFace | null {
 function storedBalance(): PlatformBalance | null {
   try {
     const raw = storageFn()?.getItem(STORAGE_KEY)
-    return raw === null || raw === undefined ? null : platformBalanceOf(JSON.parse(raw))
+    if (raw === null || raw === undefined) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return platformBalanceOf(parsed)
+    const envelope = parsed as Record<string, unknown>
+    if (typeof envelope.at !== 'number' || !Number.isFinite(envelope.at)) return platformBalanceOf(parsed)
+    if (Date.now() - envelope.at > BALANCE_STORAGE_TTL_MS) {
+      storageFn()?.removeItem(STORAGE_KEY)
+      return null
+    }
+    return platformBalanceOf(envelope.balance)
   } catch {
     return null
   }
@@ -83,24 +91,13 @@ function storedBalance(): PlatformBalance | null {
 
 function rememberBalance(value: PlatformBalance | null): void {
   try {
-    storageFn()?.setItem(STORAGE_KEY, JSON.stringify(value))
+    storageFn()?.setItem(STORAGE_KEY, JSON.stringify({ at: Date.now(), balance: value }))
   } catch {
   }
 }
 
 async function readRoute(): Promise<PlatformBalance | null> {
-  try {
-    const response = await fetch(BALANCE_ROUTE, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-    })
-    if (!response.ok) return null
-    const r = asRecord(await response.json())
-    if (r === null || r.ok !== true || r.value === null || r.value === undefined) return null
-    return platformBalanceOf(r.value)
-  } catch {
-    return null
-  }
+  return postRouteQuietly(BALANCE_ROUTE, {}, platformBalanceOf)
 }
 
 export function readPlatformBalance(onRefresh: (value: PlatformBalance) => void): PlatformBalance | null {

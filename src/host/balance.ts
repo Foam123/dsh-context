@@ -1,7 +1,8 @@
 import { asRecord } from './record'
+import { amountOf } from '../shared/decode'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PlatformBalance, PlatformBalanceEntry } from '../shared/types'
-import { type ConnectionHostFace, registerPostRoute } from './connection'
+import { mountPostRoute, reply } from './postRoute'
 
 export const BALANCE_ROUTE = '/api/dsh-context/balance'
 
@@ -23,11 +24,6 @@ interface LlmHostFace {
 
 interface CredentialsHostFace {
   resolve?(ref: string): Promise<{ value?: unknown } | undefined>
-}
-
-function amountOf(value: unknown): number | null {
-  const n = typeof value === 'string' ? Number(value) : value
-  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null
 }
 
 interface DeepSeekFacts { baseUrl: string; apiKey: string }
@@ -166,15 +162,17 @@ export function setBalanceFetcher(next: BalanceFetcher | null): void {
   fetcher = next ?? defaultFetcher
 }
 
-let inFlight: Promise<PlatformBalance | null> | null = null
+const inFlight = new Map<string, Promise<PlatformBalance | null>>()
 
 export function resetBalance(): void {
-  inFlight = null
+  inFlight.clear()
 }
 
 async function readBalance(facts: DeepSeekFacts): Promise<PlatformBalance | null> {
-  if (inFlight !== null) return inFlight
-  inFlight = (async () => {
+  const key = facts.baseUrl + '\u0000' + facts.apiKey
+  const pending = inFlight.get(key)
+  if (pending !== undefined) return pending
+  const promise = (async () => {
     let value: PlatformBalance | null = null
     try {
       const response = await fetcher(facts.baseUrl + '/user/balance', {
@@ -186,23 +184,24 @@ async function readBalance(facts: DeepSeekFacts): Promise<PlatformBalance | null
     }
     return value
   })()
-  const settled = inFlight
+  inFlight.set(key, promise)
   try {
-    return await settled
+    return await promise
   } finally {
-    inFlight = null
+    inFlight.delete(key)
   }
 }
 
 export function watchBalanceChannel(ctx: Context): void {
-  ctx.inject(['connection'], (c) => {
-
-    const handler = async (): Promise<Response> => {
+  mountPostRoute({
+    ctx,
+    deps: ['connection'],
+    path: BALANCE_ROUTE,
+    label: 'dsh-context: balance route',
+    handler: () => async (): Promise<Response> => {
       const facts = await resolveFacts(ctx)
       const value = facts !== null ? await readBalance(facts) : null
-      return Response.json({ ok: true, value }, { headers: { 'cache-control': 'no-store' } })
-    }
-
-    registerPostRoute(c, c.get('connection') as ConnectionHostFace | undefined, BALANCE_ROUTE, handler, 'dsh-context: balance route')
+      return reply({ ok: true, value })
+    },
   })
 }

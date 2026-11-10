@@ -1,5 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { createContextActivityDefinition } from './activity'
+import { createCatalogService } from './catalog'
+import { watchVersionChannel } from './versionRoute'
+import { createCostSource } from './cost'
 import { watchAttachmentChannel } from './attachment'
 import { createToolAttribution } from './attribution'
 import { watchBalanceChannel } from './balance'
@@ -8,9 +11,14 @@ import { makeColdReadGate } from './coldRead'
 import { watchCommandPageChannel } from './commandPages'
 import { Config, resolveBounds } from './config'
 import { watchDetailChannel, createDetailGate } from './detail'
+import { DetailShadow } from './detailShadow'
+import { observeOf } from './postRoute'
 import { createFallbackActivityDefinition, createFallbackHeadersDefinition, createFallbackTimelineDefinition } from './fallback'
+import { watchFactsChannel } from './facts'
+import { watchHeadsChannel } from './headsRoute'
 import { watchFleetChannel } from './fleet'
 import { createContextHeadersDefinition } from './headers'
+import { watchOverviewRoute } from './overview'
 import { watchPromptInjection } from './promptInjection'
 import { watchStepIdentity } from './stepIdentity'
 import { watchSkillCatalog } from './skills'
@@ -19,6 +27,8 @@ import { watchTimelineRowSweep } from './sweep'
 import { createContextTimelineDefinition } from './timeline'
 import { detectHarnessVersion } from './version'
 import { meetsBaseline } from '../shared/version'
+import { createOverviewCache } from './overviewCache'
+import { startFoldWorkerChannel } from './foldWorker'
 
 export const name = 'dsh-context'
 
@@ -27,6 +37,10 @@ export const inject = ['sessionProjections']
 export { Config } from './config'
 export function apply(ctx: Context, config: Config): void {
   const coldReads = makeColdReadGate()
+  const catalog = createCatalogService()
+  const pricing = createCostSource(catalog)
+  ctx.effect(() => () => { catalog.dispose() }, 'dsh-context: catalog cache')
+  watchVersionChannel(ctx, catalog)
   watchBalanceChannel(ctx)
   watchSkillCatalog(ctx)
   watchFleetChannel(ctx, coldReads)
@@ -38,19 +52,27 @@ export function apply(ctx: Context, config: Config): void {
     ctx.sessionProjections.register(createFallbackActivityDefinition() as never)
     return
   }
-  const attribution = createToolAttribution(ctx)
+  const attribution = createToolAttribution(ctx, harnessVersion)
   watchStepIdentity(ctx)
   const gate = createDetailGate(ctx)
-  watchDetailChannel(ctx, resolveBounds(config), coldReads, gate)
+  const bounds = resolveBounds(config)
+  const shadow = new DetailShadow(ctx, bounds, coldReads, () => observeOf(ctx))
+  watchDetailChannel(ctx, bounds, coldReads, gate, shadow, pricing)
+  watchFactsChannel(ctx, bounds, { gates: gate, coldReads, detailState: id => shadow.stateOf(id), cost: pricing })
   watchCommandPageChannel(ctx, resolveBounds(config), coldReads)
-  gate.retain('contextTimeline', ctx.sessionProjections.register(createContextTimelineDefinition(config, () => gate.live)))
+  watchHeadsChannel(ctx, { bounds, coldReads, cost: pricing })
+  gate.retain('contextTimeline', ctx.sessionProjections.register(createContextTimelineDefinition(config, () => gate.live, pricing)))
   ctx.sessionProjections.register(createContextHeadersDefinition(name => attribution.ownerOf(name)))
   ctx.sessionProjections.register(createContextActivityDefinition())
   watchTimelineRowSweep(ctx)
-  watchActivityBackfill(ctx, coldReads)
-  watchSnapshotRoute(ctx)
+  const cache = createOverviewCache()
+  const backfill = watchActivityBackfill(ctx, coldReads, undefined, { ownCache: cache, config })
+  watchSnapshotRoute(ctx, backfill)
+  watchOverviewRoute(ctx, pricing, backfill, { cache })
   watchPromptInjection(ctx, config)
 }
+
+export { startFoldWorkerChannel }
 
 export type { Category, ContextEventRecord, RequestRecord, Snapshot, ContextTimeline, SurfaceNode } from '../shared/types'
 export type { ActivityDay, ContextActivity, ContextHeaders, HeaderRecord, HeaderTool, ContextTimelineDetail, TimelineCounts, TimelineLast } from '../shared/types'

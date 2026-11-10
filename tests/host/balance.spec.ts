@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, test, vi } from 'vitest'
-import type { Context } from '@deepseek-ai/cordis'
 import { BALANCE_ROUTE, balanceOfPayload, resetBalance, setBalanceFetcher, watchBalanceChannel } from '../../src/host/balance'
-
-type RouteFetch = () => Promise<Response>
+import { fakeCtx, responseJson } from './helpers/ctx'
+import type { FakeCtx, FakeRoute } from './helpers/ctx'
 
 interface CtxSpec {
   connection?: unknown
@@ -12,43 +11,9 @@ interface CtxSpec {
   llm?: unknown
 }
 
-function ctxOf(spec: CtxSpec): { ctx: Context; captured: { path?: string; fetch?: RouteFetch }; disposers: (() => void)[] } {
-  const captured: { path?: string; fetch?: RouteFetch } = {}
-  const disposers: (() => void)[] = []
-  const services = new Map<string, unknown>()
-  for (const key of ['connection', 'settings', 'credentials', 'llm'] as const) {
-    if (key in spec) services.set(key, spec[key])
-  }
-  const ctx = {
-    get: (name: string) => services.get(name),
-    effect(fn: () => unknown, _label?: string) {
-      const d = fn()
-      if (typeof d === 'function') disposers.push(d as () => void)
-      return () => {}
-    },
-    inject(deps: string[], cb: (c: unknown) => unknown) {
-      if (!deps.every(d => services.has(d))) return
-      const d = cb(ctx)
-      if (typeof d === 'function') disposers.push(d as () => void)
-    },
-  }
-  if (spec.connection !== undefined && spec.connection !== null) {
-    const conn = spec.connection as { fetch?: { register?: unknown } }
-    if (typeof conn.fetch?.register === 'function') {
-      const original = conn.fetch.register as (route: { path: string; fetch: RouteFetch }) => (() => void)
-      conn.fetch.register = (route: { path: string; fetch: RouteFetch }) => {
-        const dispose = original(route)
-        captured.path = route.path
-        captured.fetch = route.fetch
-        return () => {
-          captured.fetch = undefined
-          dispose()
-        }
-      }
-    }
-  }
-  return { ctx: ctx as unknown as Context, captured, disposers }
-}
+const ctxOf = (spec: CtxSpec): FakeCtx => fakeCtx(spec)
+
+const serve = (captured: FakeRoute): Promise<Record<string, unknown>> => responseJson(captured)
 
 function settingsDescribeOf(rows: unknown, throws = false): { describe(options?: { redactSecrets?: boolean }): unknown; options: unknown[] } {
   const options: unknown[] = []
@@ -115,11 +80,6 @@ function stubPlatform(body: unknown | undefined, mode: 'ok' | 'reject' | 'status
   return { log, calls: () => log.length }
 }
 
-async function serve(captured: { fetch?: RouteFetch }): Promise<Record<string, unknown>> {
-  const response = await captured.fetch!()
-  return await response.json() as Record<string, unknown>
-}
-
 beforeEach(() => {
   resetBalance()
   vi.useFakeTimers({ toFake: ['Date'] })
@@ -130,6 +90,46 @@ afterEach(() => {
   resetBalance()
   setBalanceFetcher(null)
   vi.useRealTimers()
+})
+
+describe('balance reads across credentials', () => {
+  test('concurrent reads with different credentials never share one in-flight fetch', async () => {
+    const alpha = ctxOf({
+      connection: { fetch: { register: () => () => {} } },
+      settings: settingsOf({ apiKeyEnv: 'ALPHA_KEY' }),
+      credentials: credentialsOf('sk-alpha'),
+    })
+    const beta = ctxOf({
+      connection: { fetch: { register: () => () => {} } },
+      settings: settingsOf({ apiKeyEnv: 'BETA_KEY' }),
+      credentials: credentialsOf('sk-beta'),
+    })
+    watchBalanceChannel(alpha.ctx)
+    watchBalanceChannel(beta.ctx)
+    const log: { url: string; auth: string }[] = []
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    setBalanceFetcher(async (url, init) => {
+      const headers = (init.headers ?? {}) as Record<string, string>
+      log.push({ url, auth: headers.authorization })
+      await gate
+      const body = headers.authorization.includes('alpha')
+        ? { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '1.00', granted_balance: '1.00', topped_up_balance: '0.00' }] }
+        : { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '2.00', granted_balance: '2.00', topped_up_balance: '0.00' }] }
+      return { ok: true, status: 200, json: async () => body } as unknown as Response
+    })
+    const a = serve(alpha.captured)
+    await Promise.resolve()
+    const b = serve(beta.captured)
+    await Promise.resolve()
+    release()
+    const [x, y] = await Promise.all([a, b])
+    assert.equal(log.length, 2, 'each credential fetches its own balance')
+    assert.equal(log[1]?.auth, 'Bearer sk-beta', 'the second read carries its own key instead of joining the first')
+    assert.notDeepEqual(x, y, 'the answers report their own accounts')
+    assert.equal((x.value as { balances: { total: number }[] }).balances[0]?.total, 1)
+    assert.equal((y.value as { balances: { total: number }[] }).balances[0]?.total, 2)
+  })
 })
 
 describe('balance route registration', () => {
