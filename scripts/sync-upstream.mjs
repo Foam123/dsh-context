@@ -39,11 +39,23 @@ const LINE_RULES = new Map([
 ])
 
 const CUT_MARKERS = new Map([
-  ['tests/client/components/agentInspector.spec.ts', "describe('pluginInfo'"],
-  ['tests/client/components/contextModal.spec.ts', "describe('recomCard'"],
-  ['tests/host/commandPages.spec.ts', "describe('recoms'"],
-  ['tests/shared/attachment.spec.ts', "describe('recoms'"],
+  ['tests/client/components/agentInspector.spec.ts', ["describe('pluginInfo'", "describe('PluginInfo'"]],
+  ['tests/client/components/contextModal.spec.ts', ["describe('recomCard'", "describe('RecomCard'"]],
+  ['tests/host/commandPages.spec.ts', ["describe('recoms'"]],
+  ['tests/shared/attachment.spec.ts', ["describe('recoms'"]],
 ])
+
+function cutTopLevelBlock(text, marker) {
+  const eol = text.includes('\r\n') ? '\r\n' : '\n'
+  const lines = text.split(/\r?\n/)
+  const start = lines.findIndex(line => line.startsWith(marker))
+  if (start < 0) return text
+  let end = start + 1
+  while (end < lines.length && lines[end] !== '})') end++
+  if (end < lines.length) end++
+  while (end < lines.length && lines[end].trim() === '') end++
+  return lines.slice(0, start).concat(lines.slice(end)).join(eol)
+}
 
 const BASE_HEAD_BLOCK = /\.lc-head \{ container: lc-head \/ inline-size; \}\r?\n\.lc-head > \.lc-col \{[^\n]*\}\r?\n@container lc-head \(min-width: 640px\) \{\r?\n[^\n]*\r?\n\}\r?\n/
 
@@ -107,10 +119,9 @@ function stripText(file, text) {
   if (file.endsWith('tests/host/attachment.spec.ts')) {
     next = next.replace('const clock = 1_000_000', 'const clock = 1_700_000_000_000')
   }
-  const cut = CUT_MARKERS.get(file)
-  if (cut !== undefined) {
-    const index = next.indexOf(cut)
-    if (index >= 0) next = next.slice(0, index).replace(/\s+$/, '') + eol
+  const cuts = CUT_MARKERS.get(file)
+  if (cuts !== undefined) {
+    for (const marker of cuts) next = cutTopLevelBlock(next, marker)
   }
   if (file.startsWith('tests/')) next = pruneUnusedImports(next)
   return next.replace(/\r?\n{3,}/g, eol + eol)
