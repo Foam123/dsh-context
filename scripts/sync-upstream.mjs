@@ -31,6 +31,16 @@ const LINE_RULES = new Map([
   ['src/client/styles/stats.css', line => /^\.lc-pi-[^{]*\{/.test(line)],
   ['tests/client/components/contextView.projectionGuards.spec.ts', line => line.includes('.lc-recom') || line.includes('.lc-pi-grid')],
   ['tests/host/attachment.spec.ts', () => false],
+  ['tests/client/components/agentInspector.spec.ts', line => line.includes("from '../../../src/client/components/pluginInfo'")],
+  ['tests/client/components/contextModal.spec.ts', line => line.includes("from '../../../src/client/components/recomCard'") || line.includes("from '../../../src/shared/recoms'")],
+  ['tests/host/commandPages.spec.ts', line => line.includes("from '../../src/shared/recoms'") || line.includes("from '../../src/host/recoms'")],
+  ['tests/client/components/contextView.overview.spec.ts', line => line.includes('.lc-pi-grid') || line.includes('.lc-recom')],
+])
+
+const CUT_MARKERS = new Map([
+  ['tests/client/components/agentInspector.spec.ts', "describe('pluginInfo'"],
+  ['tests/client/components/contextModal.spec.ts', "describe('recomCard'"],
+  ['tests/host/commandPages.spec.ts', "describe('recoms'"],
 ])
 
 const BASE_HEAD_BLOCK = /\.lc-head \{ container: lc-head \/ inline-size; \}\r?\n\.lc-head > \.lc-col \{[^\n]*\}\r?\n@container lc-head \(min-width: 640px\) \{\r?\n[^\n]*\r?\n\}\r?\n/
@@ -79,6 +89,11 @@ function stripText(file, text) {
   }
   if (file.endsWith('tests/host/attachment.spec.ts')) {
     next = next.replace('const clock = 1_000_000', 'const clock = 1_700_000_000_000')
+  }
+  const cut = CUT_MARKERS.get(file)
+  if (cut !== undefined) {
+    const index = next.indexOf(cut)
+    if (index >= 0) next = next.slice(0, index).replace(/\s+$/, '') + eol
   }
   return next.replace(/\r?\n{3,}/g, eol + eol)
 }
