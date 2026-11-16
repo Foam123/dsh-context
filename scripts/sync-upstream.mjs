@@ -197,6 +197,11 @@ function resolveConflicts() {
       git(['rm', '-q', '-f', '--', file])
       continue
     }
+    const stages = git(['ls-files', '-u', '--', file])
+    if (!/^[0-9]+ [0-9a-f]+ 3\t/m.test(stages)) {
+      git(['rm', '-q', '-f', '--', file])
+      continue
+    }
     git(['checkout', '--theirs', '--', file])
     const path = resolve(ROOT, file)
     writeFileSync(path, stripText(file, readFileSync(path, 'utf8')))
