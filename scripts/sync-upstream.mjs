@@ -34,6 +34,7 @@ const LINE_RULES = new Map([
   ['tests/client/components/agentInspector.spec.ts', line => line.includes("from '../../../src/client/components/pluginInfo'")],
   ['tests/client/components/contextModal.spec.ts', line => line.includes("from '../../../src/client/components/recomCard'") || line.includes("from '../../../src/shared/recoms'")],
   ['tests/host/commandPages.spec.ts', line => line.includes("from '../../src/shared/recoms'") || line.includes("from '../../src/host/recoms'")],
+  ['tests/shared/attachment.spec.ts', line => line.includes("from '../../src/shared/recoms'")],
   ['tests/client/components/contextView.overview.spec.ts', line => line.includes('.lc-pi-grid') || line.includes('.lc-recom')],
 ])
 
@@ -41,6 +42,7 @@ const CUT_MARKERS = new Map([
   ['tests/client/components/agentInspector.spec.ts', "describe('pluginInfo'"],
   ['tests/client/components/contextModal.spec.ts', "describe('recomCard'"],
   ['tests/host/commandPages.spec.ts', "describe('recoms'"],
+  ['tests/shared/attachment.spec.ts', "describe('recoms'"],
 ])
 
 const BASE_HEAD_BLOCK = /\.lc-head \{ container: lc-head \/ inline-size; \}\r?\n\.lc-head > \.lc-col \{[^\n]*\}\r?\n@container lc-head \(min-width: 640px\) \{\r?\n[^\n]*\r?\n\}\r?\n/
@@ -70,7 +72,7 @@ function pruneUnusedImports(text) {
   return text.replace(importRe, (full, names) => {
     const list = names.split(',').map(part => part.trim()).filter(Boolean)
     const kept = list.filter(part => {
-      const id = part.split(/\s+as\s+/).pop().trim()
+      const id = part.replace(/^type\s+/, '').split(/\s+as\s+/).pop().trim()
       return new RegExp('\\b' + id.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&') + '\\b').test(body)
     })
     if (kept.length === list.length) return full
