@@ -38,23 +38,29 @@ const LINE_RULES = new Map([
   ['tests/client/components/contextView.overview.spec.ts', line => line.includes('.lc-pi-grid') || line.includes('.lc-recom')],
 ])
 
-const CUT_MARKERS = new Map([
-  ['tests/client/components/agentInspector.spec.ts', ["describe('pluginInfo'", "describe('PluginInfo'"]],
-  ['tests/client/components/contextModal.spec.ts', ["describe('recomCard'", "describe('RecomCard'"]],
-  ['tests/host/commandPages.spec.ts', ["describe('recoms'"]],
-  ['tests/shared/attachment.spec.ts', ["describe('recoms'"]],
+const CUT_FILES = new Set([
+  'tests/client/components/agentInspector.spec.ts',
+  'tests/client/components/contextModal.spec.ts',
+  'tests/host/commandPages.spec.ts',
+  'tests/shared/attachment.spec.ts',
 ])
 
-function cutTopLevelBlock(text, marker) {
+function cutCardDescribes(text) {
   const eol = text.includes('\r\n') ? '\r\n' : '\n'
   const lines = text.split(/\r?\n/)
-  const start = lines.findIndex(line => line.startsWith(marker))
-  if (start < 0) return text
-  let end = start + 1
-  while (end < lines.length && lines[end] !== '})') end++
-  if (end < lines.length) end++
-  while (end < lines.length && lines[end].trim() === '') end++
-  return lines.slice(0, start).concat(lines.slice(end)).join(eol)
+  const starts = []
+  for (let i = 0; i < lines.length; i++) {
+    if (/^describe\(/.test(lines[i])) starts.push(i)
+  }
+  const drop = new Set()
+  for (let k = 0; k < starts.length; k++) {
+    const start = starts[k]
+    const end = k + 1 < starts.length ? starts[k + 1] : lines.length
+    if (/^describe\(['"][^'"]*(recom|plugin)[^'"]*['"]/i.test(lines[start])) {
+      for (let i = start; i < end; i++) drop.add(i)
+    }
+  }
+  return lines.filter((_, i) => !drop.has(i)).join(eol).replace(/(\r?\n){3,}/g, eol + eol)
 }
 
 const BASE_HEAD_BLOCK = /\.lc-head \{ container: lc-head \/ inline-size; \}\r?\n\.lc-head > \.lc-col \{[^\n]*\}\r?\n@container lc-head \(min-width: 640px\) \{\r?\n[^\n]*\r?\n\}\r?\n/
@@ -119,10 +125,7 @@ function stripText(file, text) {
   if (file.endsWith('tests/host/attachment.spec.ts')) {
     next = next.replace('const clock = 1_000_000', 'const clock = 1_700_000_000_000')
   }
-  const cuts = CUT_MARKERS.get(file)
-  if (cuts !== undefined) {
-    for (const marker of cuts) next = cutTopLevelBlock(next, marker)
-  }
+  if (CUT_FILES.has(file)) next = cutCardDescribes(next)
   if (file.startsWith('tests/')) next = pruneUnusedImports(next)
   return next.replace(/\r?\n{3,}/g, eol + eol)
 }
