@@ -5,18 +5,20 @@ import { displayCurrencyOf } from '../cost'
 import { mergeComms, mergeDelegations } from '../fleetDetail'
 import { attestedNamesOf, commsAgentsOf } from '../fleetAgents'
 import { mergedDetailOf, useFleetDetails, useFleetModel } from '../fleetModel'
-import { teamOf } from '../fleetTeam'
+import { teamOfProjection, teamWithSummaryRosterOf } from '../fleetTeam'
 import type { ClientCtx, SessionStandardProps } from '../services'
-import { CONTEXT_VIEW_ID, openChildAsideVia, openSessionVia, projectionOf, seatKeyOf, seedConversationViewVia, unsupportedOf } from '../services'
+import { CONTEXT_VIEW_ID, openChildAsideVia, openSessionVia, seatKeyOf, seedConversationViewVia, unsupportedOf } from '../services'
 import { useFleetMemberFocus } from '../viewFocus'
 import { useContextSession } from '../sessionData'
 import type { ViewKit } from '../viewkit'
 import type { FleetDetail, FleetMemberInfo } from '../../shared/types'
 import { makeAgentGraph } from './agentGraph'
 import { makeDetailNote } from './detailNote'
+import { LoadingLane } from './skeleton'
+import { IconChecklistOutlineRegular, IconSendOutlineRegular, IconWorkspaceTreeOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { makeRichText } from './richText'
 import { makeErrorBoundary } from './errorBoundary'
-import { MissionPulse } from './missionPulse'
+import { MissionPulse, PulseHeader } from './missionPulse'
 import { makeUpgradeGate } from './upgradeGate'
 import { useConversationSurface } from './useConversationSurface'
 
@@ -46,9 +48,9 @@ export function makeFleetView(
     }, [sessionId])
     const self = data !== null ? agentSelfOf(data, pressure, breakdown, usage) : undefined
     const { forest, team: rowTeam, titles } = useFleetModel(ctx, heads, sessionId, self, data !== null, 120)
-    const teamDirect = projectionOf(props, 'agentTeam', teamOf)
-    const team = teamDirect ?? rowTeam
+    const teamDirect = teamOfProjection(props, sessionId)
     const details = useFleetDetails(undefined, { scopeKey: sessionId })
+    const team = teamWithSummaryRosterOf(teamDirect ?? rowTeam, details.summary?.members)
     const focusMember = useFleetMemberFocus(sessionId)
     const byId = useMemo(
       () => new Map((forest?.nodes ?? []).map(node => [node.id, node])),
@@ -112,12 +114,54 @@ export function makeFleetView(
       seedConversationViewVia(id, CONTEXT_VIEW_ID)
       openSessionVia(ctx, id)
     }
+    if (data === null && source.detailState === 'failed') {
+      return (
+        <div className="lc-root" ref={rootRef}>
+          <DetailNote state="failed" onRetry={source.retryDetail} />
+        </div>
+      )
+    }
     if (data === null) {
       return (
         <div className="lc-root" ref={rootRef}>
-          {source.detailState === 'failed'
-            ? <DetailNote state="failed" onRetry={source.retryDetail} />
-            : <div className="lc-empty">{t('loading')}</div>}
+          <div className="lc-pulse" aria-busy="true">
+            <PulseHeader
+              agentCount={0}
+              running={null}
+              tasks={0}
+              messages={0}
+              pending
+              failed={0}
+              total={0}
+              selected={null}
+              t={t}
+            />
+            <div className="lc-pulse-main lc-pulse-main-graph">
+              <div className="lc-col-graph">
+                <div className="lc-card lc-deferred-skeleton lc-pulse-graph-skel" aria-hidden="true" />
+              </div>
+              <div className="lc-pulse-boards">
+                <div className="lc-card lc-pulse-timeline lc-pulse-board-skel">
+                  <div className="lc-card-title">
+                    <span className="lc-card-title-text"><IconWorkspaceTreeOutlineRegular size={14} />{t('fleet.pulse.timeline')}</span>
+                  </div>
+                  <LoadingLane />
+                </div>
+                <div className="lc-card lc-pulse-tasks lc-pulse-board-skel">
+                  <div className="lc-card-title">
+                    <span className="lc-card-title-text"><IconChecklistOutlineRegular size={14} />{t('fleet.pulse.work')}</span>
+                  </div>
+                  <LoadingLane />
+                </div>
+              </div>
+            </div>
+            <div className="lc-card lc-pulse-events lc-pulse-events-skel">
+              <div className="lc-card-title">
+                <span className="lc-card-title-text"><IconSendOutlineRegular size={14} />{t('fleet.pulse.events')}</span>
+              </div>
+              <LoadingLane />
+            </div>
+          </div>
         </div>
       )
     }

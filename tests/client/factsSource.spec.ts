@@ -1,38 +1,17 @@
+// @vitest-environment node
+
 import assert from 'node:assert/strict'
 import { afterEach, describe, test, vi } from 'vitest'
-import {
-  DetailStore,
-  detailBytesOf,
-  detailStoreOf,
-  factsOf,
-  makeFactsFetchers,
-  resetTimelineDetailStores,
-} from '../../src/client/timelineSource'
-import type { FactPart, FactsRead } from '../../src/client/timelineSource'
+import { DetailStore, detailBytesOf, detailStoreOf, factsOf, makeFactsFetchers, resetTimelineDetailStores, type FactPart } from '../../src/client/timelineSource'
 import { RouteError } from '../../src/client/route'
-import type { ContextTimelineDetail } from '../../src/shared/types'
+import { type ContextTimelineDetail } from '../../src/shared/types'
+import { core, head, series, storeOf, T0 } from './helpers/factsFixtures'
 import { until } from './helpers/kit'
+import { invalidate, resetInvalidations, subscribeInvalidations, type InvalidationEvent } from '../../src/client/invalidation'
+
+describe('factsSource', () => {
 
 afterEach(() => { vi.unstubAllGlobals() })
-
-const T0 = 1_700_000_000_000
-
-function head(rev: number): Record<string, unknown> {
-  return {
-    ok: true,
-    current: { system: 1, tools: 2, user: 3, inject: 0, skill: 0, assistant: 4, tool: 5, total: 15 },
-    counts: { turns: 1, steps: 1, injects: 0, compactions: 0, prunes: 0 },
-    detailRev: rev,
-  }
-}
-
-function series(rev: number): Record<string, unknown>[] {
-  return [{ seq: rev, time: T0, total: 15, turn: 1, step: 0, system: 1, tools: 2, user: 3, inject: 0, assistant: 4, tool: 5 }]
-}
-
-function core(rev: number): FactsRead {
-  return { rev, live: true, asOfSeq: rev, parts: { head: head(rev) as never, series: series(rev) as never } }
-}
 
 function emptyDetail(rev: number): ContextTimelineDetail {
   return { rev, requests: [], events: [], nodes: [], droppedNodes: 0, archive: [] }
@@ -149,14 +128,6 @@ describe('factsOf decoding', () => {
 })
 
 describe('DetailStore over the facts protocol', () => {
-  function storeOf(readCore: () => Promise<unknown>, readPart: (part: FactPart, window: unknown) => Promise<unknown> = async () => null) {
-    const fetchers = {
-      core: async () => readCore() as never,
-      part: async (part: FactPart, window: unknown) => readPart(part, window) as never,
-    }
-    return new DetailStore(fetchers, 0)
-  }
-
   test('the core read lands the head and series; collections wait for an explicit part request', async () => {
     const parts: FactPart[] = []
     const store = storeOf(async () => core(4), async (part) => {
@@ -306,9 +277,12 @@ describe('DetailStore over the facts protocol', () => {
   })
 
   test('merges every collection part with its floor watermarks', async () => {
+    let filesFloor: number | undefined = 2
     const store = storeOf(async () => ({ rev: 1, live: true, parts: { head: head(1) as never } }), async (part) => {
       if (part === 'events') return { rev: 1, parts: { events: [{ seq: 1, time: T0, kind: 'inject', form: 'context' }] } }
-      if (part === 'files') return { rev: 1, parts: { files: { fileOps: [], fileOpsFloor: 2 } } }
+      if (part === 'files') {
+        return { rev: 1, parts: { files: { fileOps: [], ...(filesFloor === undefined ? {} : { fileOpsFloor: filesFloor }) } } }
+      }
       if (part === 'commands') return { rev: 1, parts: { commands: { commands: [], commandsFloor: 3, commandStats: { runs: 2, failed: 0, ms: 1, bg: 0 } } } }
       if (part === 'spans') return { rev: 1, parts: { spans: [{ kind: 'text', start: 1, end: 2 }] } }
       return {
@@ -329,6 +303,9 @@ describe('DetailStore over the facts protocol', () => {
     assert.equal(detail.spans?.length, 1)
     assert.equal(detail.surfaceFloor, 5)
     assert.equal(detail.archiveFloor, 4)
+    filesFloor = undefined
+    store.ensurePart('files', { filesTail: 10 })
+    await until(() => store.getSnapshot().detail?.fileOpsFloor === undefined, 'a replacement without the watermark clears the carried one')
   })
 
   test('a null part result changes nothing and a reset discards in-flight parts', async () => {
@@ -770,4 +747,72 @@ describe('makeFactsFetchers over HTTP', () => {
     assert.equal(part !== null, true)
     assert.deepEqual(requests[1]?.body, { sessionId: 's1', parts: ['nodes'], window: { nodesTail: 10 } })
   })
+})
+})
+
+describe('invalidation', () => {
+
+describe('invalidation seam', () => {
+  test('events deliver kind plus only the provided scope fields', () => {
+    const seen: InvalidationEvent[] = []
+    const off = subscribeInvalidations(event => { seen.push(event) })
+    try {
+      invalidate('overview')
+      invalidate('sessions', { revision: 4 })
+      invalidate('heads', { sessionId: 's1' })
+      invalidate('pricing', { sessionId: 's1', revision: 2 })
+      assert.deepEqual(seen, [
+        { kind: 'overview' },
+        { kind: 'sessions', revision: 4 },
+        { kind: 'heads', sessionId: 's1' },
+        { kind: 'pricing', sessionId: 's1', revision: 2 },
+      ])
+    } finally {
+      off()
+      resetInvalidations()
+    }
+  })
+
+  test('unsubscribe and reset stop delivery, including listeners changed mid-dispatch', () => {
+    const seen: string[] = []
+    const second = (event: InvalidationEvent): void => { seen.push('second:' + event.kind) }
+    const offFirst = subscribeInvalidations(() => {
+      seen.push('first')
+      offFirst()
+      offSecond()
+    })
+    const offSecond = subscribeInvalidations(second)
+    try {
+      invalidate('fleet')
+      assert.deepEqual(seen, ['first', 'second:fleet'])
+      invalidate('fleet')
+      assert.deepEqual(seen, ['first', 'second:fleet'])
+      subscribeInvalidations(event => { seen.push('third:' + event.kind) })
+      resetInvalidations()
+      invalidate('overview')
+      assert.deepEqual(seen, ['first', 'second:fleet'])
+    } finally {
+      offFirst()
+      offSecond()
+      resetInvalidations()
+    }
+  })
+
+  test('a listener added during dispatch runs from the next event only', () => {
+    const seen: string[] = []
+    const off = subscribeInvalidations(() => {
+      seen.push('outer')
+      subscribeInvalidations(() => { seen.push('inner') })
+    })
+    try {
+      invalidate('fleet')
+      assert.deepEqual(seen, ['outer'])
+      invalidate('fleet')
+      assert.deepEqual(seen, ['outer', 'outer', 'inner'])
+    } finally {
+      off()
+      resetInvalidations()
+    }
+  })
+})
 })

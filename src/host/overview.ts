@@ -72,7 +72,7 @@ const SORTS = new Set<OverviewSort>(['recent', 'tokens', 'context'])
 
 const TALLY_FIELDS = new Set<OverviewTallyField>(['skills', 'tools', 'cmds'])
 
-const RANGES = new Set<string>(['all', 'today', '7d', '30d'])
+const RANGES = new Set<string>(['today', '7d', '30d'])
 
 interface FeedState extends RowFeed {
   served: Map<string, string>
@@ -87,12 +87,15 @@ function rangeOf(value: unknown): OverviewRange {
     const end = optionalNumOf(data.end)
     if (start !== undefined && end !== undefined) return { start, end }
   }
-  return 'all'
+  return '30d'
 }
 
-function scopeOf(value: unknown): OverviewScope {
+type ParsedScope = OverviewScope & { range: OverviewRange }
+
+function scopeOf(value: unknown): ParsedScope {
   const data = asRecord(value)
-  if (data === null) return {}
+  const range = rangeOf(data?.range)
+  if (data === null) return { range }
   const coverage = typeof data.coverage === 'string' && COVERAGES.has(data.coverage as OverviewCoverage)
     ? data.coverage as OverviewCoverage
     : undefined
@@ -100,7 +103,7 @@ function scopeOf(value: unknown): OverviewScope {
   const group = typeof data.group === 'string' && data.group !== '' ? data.group : undefined
   const query = typeof data.query === 'string' && data.query !== '' ? data.query.slice(0, MAX_QUERY_CHARS) : undefined
   return {
-    range: rangeOf(data.range),
+    range,
     ...(coverage === undefined ? {} : { coverage }),
     ...(day === undefined ? {} : { day }),
     ...(group === undefined ? {} : { group }),
@@ -119,7 +122,7 @@ function pickOf(value: unknown): OverviewPick | null {
 interface ParsedRequest {
   part: OverviewPart
   revision?: string
-  scope: OverviewScope
+  scope: ParsedScope
   sort: OverviewSort
   page: number
   tally: OverviewTallyField
@@ -169,7 +172,6 @@ interface FeedView {
   workspace: WorkspaceState
   coverage: BackfillCoverage
   filters: Filters
-  open: boolean
 }
 
 function valueOf(parsed: ParsedRequest, revision: string, cost: CostSource, data: FeedView): OverviewValue {
@@ -178,7 +180,7 @@ function valueOf(parsed: ParsedRequest, revision: string, cost: CostSource, data
     return {
       revision,
       pricingReady,
-      summary: summaryOf(data.allRows, data.rows, data.filters, cost, data.coverage, data.open),
+      summary: summaryOf(data.allRows, data.rows, data.filters, cost, data.coverage),
     }
   }
   if (parsed.part === 'days') {
@@ -204,6 +206,8 @@ export interface OverviewRouteOptions {
   scanTtlMs?: number
   servedKeysMax?: number
   idleMs?: number
+  captureDelayMs?: number
+  capturePollMs?: number
   yieldEvery?: number
   yieldTo?: () => Promise<void>
   cache?: OverviewCache
@@ -219,6 +223,8 @@ export function watchOverviewRoute(
   const scanTtlMs = options.scanTtlMs ?? SCAN_TTL_MS
   const servedKeysMax = options.servedKeysMax ?? SERVED_KEYS_MAX
   const idleMs = options.idleMs ?? IDLE_MS
+  const captureDelayMs = options.captureDelayMs ?? CAPTURE_DELAY_MS
+  const capturePollMs = options.capturePollMs ?? CAPTURE_BACKFILL_POLL_MS
   const feed: FeedState = { revision: '', sessions: new Map(), rows: null, served: new Map(), rowsRevision: '' }
   const scanWindow = makeScanWindow(scanTtlMs)
   let materializeTail: Promise<void> = Promise.resolve()
@@ -394,14 +400,14 @@ export function watchOverviewRoute(
           if (coverage.running || !coverage.complete) {
             /* v8 ignore next 1 */
             if (Date.now() - startedAt < CAPTURE_MAX_WAIT_MS) {
-              const timer = setTimeout(waitForBackfill, CAPTURE_BACKFILL_POLL_MS)
+              const timer = setTimeout(waitForBackfill, capturePollMs)
               ;(timer as { unref?: () => void }).unref?.()
               return
             }
           }
           runCapture()
         }
-        setTimeout(waitForBackfill, CAPTURE_DELAY_MS)
+        setTimeout(waitForBackfill, captureDelayMs)
       }
 
       const materialize = async (parsed: ParsedRequest, scanned: ScanResult): Promise<OverviewValue> => {
@@ -439,7 +445,7 @@ export function watchOverviewRoute(
         if (feed.revision !== revision) feed.served.clear()
         const now = Date.now()
         const filters = filtersOf(parsed, now)
-        const timeKey = filters.window.start === null ? '' : dayKeyOf(filters.window.start) ?? ''
+        const timeKey = dayKeyOf(filters.window.start) ?? ''
         const requestKey = requestKeyOf(parsed, timeKey)
         if (dirty.size === 0 && parsed.revision !== undefined
           && parsed.revision === revision && servedOf(feed, requestKey)) {
@@ -478,7 +484,6 @@ export function watchOverviewRoute(
           feed.rowsRevision = built.incomplete > 0 ? '' : revision
           if (identityMode && (dirty.size > 0 || built.rebuilt > 0)) saveCache(coldIds)
         }
-        const open = filters.day === null && filters.window.start === null && filters.window.end === null
         const value = valueOf(parsed, revision, cost, {
           allRows: rows,
           rows: rows.filter(row => matches(row, filters)),
@@ -486,7 +491,6 @@ export function watchOverviewRoute(
           workspace,
           coverage: backfill.coverage(),
           filters,
-          open,
         })
         rememberServed(feed, requestKey, servedKeysMax)
         return value
