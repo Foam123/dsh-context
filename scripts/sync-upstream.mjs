@@ -64,6 +64,21 @@ function ensureUpstream() {
   }
 }
 
+function pruneUnusedImports(text) {
+  const importRe = /^import\s*(?:type\s*)?\{([^}\n]*)\}\s*from\s*'[^'\n]+'\s*\r?\n/gm
+  const body = text.replace(importRe, '')
+  return text.replace(importRe, (full, names) => {
+    const list = names.split(',').map(part => part.trim()).filter(Boolean)
+    const kept = list.filter(part => {
+      const id = part.split(/\s+as\s+/).pop().trim()
+      return new RegExp('\\b' + id.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&') + '\\b').test(body)
+    })
+    if (kept.length === list.length) return full
+    if (kept.length === 0) return ''
+    return full.replace('{' + names + '}', '{ ' + kept.join(', ') + ' }')
+  })
+}
+
 function stripText(file, text) {
   const eol = text.includes('\r\n') ? '\r\n' : '\n'
   const rule = LINE_RULES.get(file) ?? (I18N_FILE.test(file) ? line => I18N_REMOVAL.test(line) : undefined)
@@ -95,6 +110,7 @@ function stripText(file, text) {
     const index = next.indexOf(cut)
     if (index >= 0) next = next.slice(0, index).replace(/\s+$/, '') + eol
   }
+  if (file.startsWith('tests/')) next = pruneUnusedImports(next)
   return next.replace(/\r?\n{3,}/g, eol + eol)
 }
 
