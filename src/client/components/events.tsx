@@ -11,6 +11,14 @@ import { remoteStateOf } from './useRemoteState'
 
 export const EVENT_KINDS = ['inject', 'compaction', 'prune', 'model'] as const
 
+export const EVENT_FILTERS = ['all', ...EVENT_KINDS] as const
+
+export type EventKindFilter = (typeof EVENT_FILTERS)[number]
+
+export function eventFilterLabelOf(t: Translate, filter: EventKindFilter): string {
+  return t(filter === 'model' ? 'kind.modelSwitch' : 'kind.' + filter)
+}
+
 const EVENT_ICONS: Record<string, string> = { compaction: '✂', prune: '✂', mode: '⇄' }
 
 export interface EventListProps {

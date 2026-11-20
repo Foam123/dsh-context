@@ -3,6 +3,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { BACKFILL_ROUTE } from '../../../src/host/backfill'
 
+export const FAST_PACING = {
+  now: () => performance.now(),
+  sleep: () => Promise.resolve(),
+  minRestMs: 1,
+  workBudgetMs: 1_000_000,
+  roundPauseMs: 1,
+}
+
 export async function until<T>(read: () => T | undefined, message: string): Promise<T> {
   for (let i = 0; i < 300; i++) {
     const value = read()
@@ -124,4 +132,12 @@ export function fakeState(listed: unknown): FakeState {
     coldSnapshots: [],
     failReads: new Map(),
   }
+}
+
+export function assertIssueDetail(issues: { id: string; reason: string }[] | undefined, firstId: string): void {
+  assert.equal(issues?.length, 16, 'the detail stays bounded')
+  assert.equal(issues?.[0].id, firstId)
+  const reason = issues?.[0].reason ?? ''
+  assert.ok(reason.endsWith('…'))
+  assert.equal(reason.length, 181)
 }

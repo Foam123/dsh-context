@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import { IconApi, IconBrowse, IconContextInjection, IconFolderOpen } from '../primitives'
 import type { ViewKit } from '../viewkit'
-import { EVENT_KINDS } from './events'
+import { EVENT_FILTERS, eventFilterLabelOf } from './events'
 import { LoadingLane, SkeletonRows } from './skeleton'
 
 export interface CardSkeletons {
@@ -43,9 +43,9 @@ export function makeCardSkeletons(kit: ViewKit): CardSkeletons {
             {t('events.title')}
           </span>
           <div className="lc-kinds @max-[380px]/lc-card:flex-wrap">
-            {EVENT_KINDS.map(k => (
-              <span key={k} className="lc-gran-btn">
-                {t('kind.' + k)}
+            {EVENT_FILTERS.map(k => (
+              <span key={k} className={'lc-gran-btn lc-kind-' + k + (k === 'all' ? ' lc-gran-on' : '')}>
+                {eventFilterLabelOf(t, k)}
                 <span className="lc-kind-n">0</span>
               </span>
             ))}

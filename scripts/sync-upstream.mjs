@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { runPm } from './pm.mjs'
 
 const ROOT = resolve(import.meta.dirname, '..')
@@ -218,11 +218,15 @@ function installIfNeeded() {
 }
 
 function runGate() {
-  for (const script of ['lint', 'typecheck', 'coverage']) {
-    let status = runPm(['run', script])
+  const buildTmp = join(ROOT, '.tmp', 'build')
+  mkdirSync(buildTmp, { recursive: true })
+  const env = { TMP: buildTmp, TEMP: buildTmp, TMPDIR: buildTmp }
+  const steps = [['build', { env }], ['lint'], ['typecheck'], ['coverage']]
+  for (const [script, options] of steps) {
+    let status = runPm(['run', script], options)
     if (status !== 0) {
       console.log('sync-upstream: retrying the ' + script + ' gate')
-      status = runPm(['run', script])
+      status = runPm(['run', script], options)
     }
     if (status !== 0) abortMerge('the ' + script + ' gate failed')
   }
